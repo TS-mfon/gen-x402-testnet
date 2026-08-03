@@ -70,11 +70,27 @@ export type EvidenceClaim = { statement: string; value: unknown; confidence?: nu
 export type EvidenceRecord = {
   id: string;
   providerId: string;
+  providerName: string;
+  providerCategory: string;
+  sourceType: string;
+  sourceHost: string;
   retrievedAt: string;
   rawResponseHash: string;
   blobUrl?: string;
   claims: EvidenceClaim[];
+  facts: string[];
+  recommendation?: string;
+  confidence: number;
+  limitations: string[];
   costAtomic: string;
+  paymentReceipt?: string;
+};
+
+export type ProviderAssessment = {
+  providerId: string;
+  quality: number;
+  useful: boolean;
+  contribution: string;
 };
 
 export type Verdict = {
@@ -83,6 +99,10 @@ export type Verdict = {
   score: number;
   summary: string;
   reasonCodes: string[];
+  combinedAnalysis?: string;
+  providerAssessments?: ProviderAssessment[];
+  agreements?: string[];
+  conflicts?: string[];
   evidenceDigest: string;
   expiresAt: string;
   genlayerNetwork: "studionet";

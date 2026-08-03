@@ -3,13 +3,31 @@ import { fromCdpEvmAccount } from "@coinbase/cdp-sdk/x402";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { env } from "@/lib/env";
-import type { IntelligenceRequest } from "@/lib/domain";
+import type { EvidenceClaim, EvidenceRecord, IntelligenceRequest, ProductType } from "@/lib/domain";
 import { sha256, stableJson } from "@/lib/hash";
 import { assertSafeRemoteUrl } from "@/lib/security";
 import { appendEvent, consumeDailyBudget, listProviders } from "@/lib/store";
 
 const BASE_SEPOLIA = "eip155:84532";
 const BASE_SEPOLIA_USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
+const REQUIRED_EVIDENCE_QUORUM = 2;
+const EXCLUDED_DECISION_CATEGORIES = new Set(["protocol-smoke", "utility", "discovered"]);
+const PRODUCT_CAPABILITIES: Record<ProductType, string[]> = {
+  gateway: ["market-risk", "compliance", "web-research", "developer-risk", "stablecoin-risk", "agent-evaluation", "agent-access"],
+  investigation: ["web-research", "market-risk", "compliance", "developer-risk", "stablecoin-risk"],
+  procurement: ["agent-access", "agent-evaluation", "developer-risk", "web-research"],
+  decision: ["market-risk", "compliance", "web-research", "developer-risk", "stablecoin-risk", "agent-evaluation"],
+  quality: ["agent-evaluation", "developer-risk", "web-research"],
+};
+const CATEGORY_KEYWORDS: Record<string, string[]> = {
+  "market-risk": ["market", "token", "trade", "buy", "sell", "price", "yield", "financial", "liquidity", "volatility"],
+  compliance: ["compliance", "ofac", "sanction", "address", "wallet", "counterparty", "vendor", "payment", "aml"],
+  "web-research": ["research", "claim", "news", "source", "verify", "investigate", "protocol", "exploit"],
+  "developer-risk": ["code", "repository", "github", "contract", "developer", "security", "audit", "bug"],
+  "stablecoin-risk": ["stablecoin", "usdc", "usdt", "bridge", "depeg", "flow"],
+  "agent-evaluation": ["agent", "output", "quality", "evaluate", "work", "deliverable"],
+  "agent-access": ["provider", "service", "procure", "endpoint", "access"],
+};
 let cdpPaidFetchPromise: Promise<typeof fetch> | undefined;
 
 function getCdpPaidFetch() {
@@ -34,44 +52,104 @@ function providerUrl(provider: any, input: IntelligenceRequest) {
 
 export async function selectProviders(input: IntelligenceRequest, max: number) {
   const all = await listProviders();
-  const terms = `${input.task} ${JSON.stringify(input.context)}`.toLowerCase();
-  return all.filter((provider: any) => provider.test_enabled && provider.network === BASE_SEPOLIA && provider.asset.toLowerCase() === BASE_SEPOLIA_USDC && Number(provider.price_atomic) <= env.TESTNET_JOB_BUDGET_ATOMIC)
-    .map((provider: any) => ({ ...provider, relevance: (terms.includes(provider.category) ? 40 : 0) + Number(provider.quality_score ?? 50) + Number(provider.availability_score ?? 50) }))
+  const terms = `${input.task} ${JSON.stringify(input.subject)} ${JSON.stringify(input.context)} ${input.acceptanceCriteria.join(" ")}`.toLowerCase();
+  const allowed = new Set(PRODUCT_CAPABILITIES[input.product]);
+  const ranked = all.filter((provider: any) => provider.test_enabled && provider.network === BASE_SEPOLIA && provider.asset.toLowerCase() === BASE_SEPOLIA_USDC && Number(provider.price_atomic) <= env.TESTNET_JOB_BUDGET_ATOMIC && allowed.has(provider.category) && !EXCLUDED_DECISION_CATEGORIES.has(provider.category))
+    .map((provider: any) => {
+      const keywordHits = (CATEGORY_KEYWORDS[provider.category] ?? []).filter(keyword => terms.includes(keyword)).length;
+      const productPriority = PRODUCT_CAPABILITIES[input.product].indexOf(provider.category);
+      return { ...provider, sourceHost: new URL(provider.endpoint).hostname, relevance: keywordHits * 30 + Math.max(0, 20 - productPriority * 3) + Number(provider.quality_score ?? 50) + Number(provider.availability_score ?? 50) };
+    })
     .sort((left: any, right: any) => right.relevance - left.relevance || Number(left.price_atomic) - Number(right.price_atomic))
-    .slice(0, Math.min(max, 2));
+  const candidates = [];
+  let candidateCost = 0;
+  for (const provider of ranked) {
+    const price = Number(provider.price_atomic);
+    if (candidateCost + price > env.TESTNET_JOB_BUDGET_ATOMIC) continue;
+    candidates.push(provider);
+    candidateCost += price;
+    if (candidates.length >= Math.max(REQUIRED_EVIDENCE_QUORUM, max) + 4) break;
+  }
+  return candidates;
 }
 
-export async function collectEvidence(input: IntelligenceRequest, providers: any[], jobId?: string) {
+function extractStrings(value: unknown, depth = 0): string[] {
+  if (depth > 4) return [];
+  if (typeof value === "string") return value.trim().length >= 12 ? [value.trim()] : [];
+  if (Array.isArray(value)) return value.flatMap(item => extractStrings(item, depth + 1));
+  if (value && typeof value === "object") return Object.values(value).flatMap(item => extractStrings(item, depth + 1));
+  return [];
+}
+
+export function validateProviderContent(contentType: string, text: string) {
+  const normalizedType = contentType.toLowerCase();
+  const prefix = text.slice(0, 16);
+  if (normalizedType.startsWith("audio/") || normalizedType.startsWith("image/") || normalizedType.startsWith("video/") || normalizedType.includes("octet-stream")) return { usable: false, reason: "binary_content_type" };
+  if (prefix.startsWith("RIFF") || prefix.startsWith("ID3") || text.includes("\u0000")) return { usable: false, reason: "binary_content" };
+  if (text.trim().length < 40) return { usable: false, reason: "response_too_short" };
+  return { usable: true };
+}
+
+export async function normalizeProviderResponse(provider: any, text: string, contentType: string, receipt?: string): Promise<EvidenceRecord> {
+  const validation = validateProviderContent(contentType, text);
+  if (!validation.usable) throw new Error(`Unusable provider response: ${validation.reason}`);
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { value = { text: text.slice(0, 50_000) }; }
+  const strings = [...new Set(extractStrings(value))].filter(item => !/^(success|ok|true|false)$/i.test(item)).slice(0, 12);
+  if (!strings.length) throw new Error("Unusable provider response: no coherent claims");
+  const facts = strings.slice(0, 8);
+  const claims: EvidenceClaim[] = facts.map(statement => ({ statement, value: statement, confidence: 0.7 }));
+  const recommendation = strings.find(item => /recommend|should|risk|allow|deny|safe|unsafe|approve|reject/i.test(item));
+  return {
+    id: crypto.randomUUID(), providerId: provider.id, providerName: provider.name, providerCategory: provider.category,
+    sourceType: provider.category, sourceHost: provider.sourceHost ?? new URL(provider.endpoint).hostname,
+    retrievedAt: new Date().toISOString(), rawResponseHash: await sha256(text), costAtomic: String(provider.price_atomic),
+    claims, facts, recommendation, confidence: 70, limitations: ["Third-party x402 response; GenLayer must independently compare it with another source."], paymentReceipt: receipt,
+  };
+}
+
+export async function collectEvidence(input: IntelligenceRequest, providers: any[], jobId?: string, required = REQUIRED_EVIDENCE_QUORUM) {
   const hasCdpWallet = Boolean(env.CDP_API_KEY_ID && env.CDP_API_KEY_SECRET && env.CDP_WALLET_SECRET);
-  if (!hasCdpWallet) return [{ id: crypto.randomUUID(), providerId: "gateway", retrievedAt: new Date().toISOString(), rawResponseHash: await sha256(stableJson(input)), costAtomic: "0", claims: [{ statement: "CDP testnet operations wallet is not configured", value: { task: input.task }, confidence: 0 }] }];
+  if (!hasCdpWallet) {
+    if (process.env.NODE_ENV === "test") {
+      return ["test-source-a", "test-source-b"].map((providerId, index) => ({
+        id: crypto.randomUUID(), providerId, providerName: `Test source ${index + 1}`, providerCategory: "test", sourceType: "test", sourceHost: `${providerId}.local`, retrievedAt: new Date().toISOString(), rawResponseHash: `test-${providerId}`, claims: [{ statement: `Independent test evidence ${index + 1}`, value: { task: input.task }, confidence: 0.7 }], facts: [`Independent test evidence ${index + 1}`], recommendation: "test", confidence: 70, limitations: [], costAtomic: "0",
+      }));
+    }
+    throw new Error("provider_payment_wallet_not_configured");
+  }
   const total = providers.reduce((sum, provider) => sum + Number(provider.price_atomic), 0);
   if (total > env.TESTNET_JOB_BUDGET_ATOMIC) throw new Error("Selected providers exceed the per-job testnet budget");
   await consumeDailyBudget(total);
   const paidFetch = await getCdpPaidFetch();
-  const evidence = [];
+  const evidence: EvidenceRecord[] = [];
+  const usedHosts = new Set<string>();
   for (const provider of providers) {
+    if (evidence.length >= required) break;
+    const sourceHost = provider.sourceHost ?? new URL(provider.endpoint).hostname;
+    if (usedHosts.has(sourceHost)) continue;
     const startedAt = Date.now();
     const url = providerUrl(provider, input);
     const method = provider.method === "POST" ? "POST" : "GET";
     const init: RequestInit = { method, headers: { "idempotency-key": `${input.clientRequestId}:${provider.id}` }, signal: AbortSignal.timeout(20_000) };
     if (method === "POST") {
       init.headers = { ...init.headers, "content-type": "application/json" };
-      init.body = JSON.stringify(provider.fixture?.body ?? { task: input.task, subject: input.subject, context: input.context });
+      init.body = JSON.stringify({ ...(provider.fixture?.body ?? {}), task: input.task, query: input.task, subject: input.subject, context: input.context, acceptanceCriteria: input.acceptanceCriteria });
     }
     try {
       const response = await paidFetch(url, init);
       const text = await response.text();
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
       if (text.length > 2_000_000) throw new Error("Provider response too large");
-      let value: unknown;
-      try { value = JSON.parse(text); } catch { value = { text: text.slice(0, 50_000) }; }
       const receipt = response.headers.get("payment-response") ?? response.headers.get("x-payment-response") ?? undefined;
+      const normalized = await normalizeProviderResponse(provider, text, response.headers.get("content-type") ?? "", receipt);
       await appendEvent("provider.succeeded", { jobId, jobClientRequestId: input.clientRequestId, providerId: provider.id, providerName: provider.name, endpoint: url.toString(), method, network: provider.network, asset: provider.asset, costAtomic: provider.price_atomic, latencyMs: Date.now() - startedAt, httpStatus: response.status, contentType: response.headers.get("content-type"), responseBytes: Buffer.byteLength(text), responsePreview: text.slice(0, 2000), paymentReceipt: receipt });
-      evidence.push({ id: crypto.randomUUID(), providerId: provider.id, retrievedAt: new Date().toISOString(), rawResponseHash: await sha256(text), costAtomic: String(provider.price_atomic), claims: [{ statement: `Response from ${provider.name}`, value, confidence: .8 }], paymentReceipt: receipt });
+      evidence.push(normalized);
+      usedHosts.add(sourceHost);
     } catch (error) {
       await appendEvent("provider.failed", { jobId, jobClientRequestId: input.clientRequestId, providerId: provider.id, providerName: provider.name, endpoint: url.toString(), method, network: provider.network, asset: provider.asset, costAtomic: provider.price_atomic, latencyMs: Date.now() - startedAt, error: error instanceof Error ? error.message : "Unknown provider error" });
     }
   }
-  if (evidence.length) return evidence;
-  return [{ id: crypto.randomUUID(), providerId: "gateway", retrievedAt: new Date().toISOString(), rawResponseHash: await sha256(stableJson(input)), costAtomic: "0", claims: [{ statement: "No paid testnet provider returned usable evidence", value: { task: input.task }, confidence: .1 }] }];
+  if (evidence.length < required) throw new Error(`provider_quorum_unavailable:${evidence.length}/${required}`);
+  return evidence;
 }
