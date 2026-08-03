@@ -37,6 +37,7 @@ const namespace = "testnet";
 const jobPath = (id: string) => `${namespace}/jobs/${id}/snapshot.json`;
 const verdictPath = (id: string) => `${namespace}/jobs/${id}/verdict.json`;
 const executionPath = (id: string) => `${namespace}/jobs/${id}/execution.json`;
+const evidencePath = (id: string) => `${namespace}/jobs/${id}/evidence.json`;
 const idempotencyPath = (key: string) => `${namespace}/idempotency/${key}.json`;
 const budgetPath = (date: string) => `${namespace}/budgets/${date}.json`;
 
@@ -191,7 +192,7 @@ export async function getVerdict(jobId: string) {
   return (await readJson<Verdict>(verdictPath(jobId)))?.value ?? null;
 }
 
-export type JobExecution = { transaction: string; evidenceDigest: string; submittedAt: string };
+export type JobExecution = { transaction: string; evidenceDigest: string; submittedAt: string; submissionAttempt: number };
 export async function saveExecution(jobId: string, execution: JobExecution) {
   if (!usesBlob) return;
   await writeJson(executionPath(jobId), execution);
@@ -200,6 +201,14 @@ export async function saveExecution(jobId: string, execution: JobExecution) {
 export async function getExecution(jobId: string) {
   if (!usesBlob) return null;
   return (await readJson<JobExecution>(executionPath(jobId)))?.value ?? null;
+}
+export async function saveEvidence(jobId: string, evidence: unknown[]) {
+  if (!usesBlob) return;
+  await writeJson(evidencePath(jobId), evidence);
+}
+export async function getEvidence(jobId: string) {
+  if (!usesBlob) return null;
+  return (await readJson<unknown[]>(evidencePath(jobId)))?.value ?? null;
 }
 
 export async function listProviders() {
