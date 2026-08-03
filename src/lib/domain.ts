@@ -35,6 +35,41 @@ export const requestSchema = z.object({
 });
 export type IntelligenceRequest = z.infer<typeof requestSchema>;
 
+export const quoteRequestSchema = requestSchema.omit({ clientRequestId: true }).extend({
+  clientRequestId: z.string().min(8).max(128).optional(),
+});
+export type QuoteRequest = z.infer<typeof quoteRequestSchema>;
+
+export type QuotedProvider = {
+  id: string;
+  name: string;
+  category: string;
+  sourceHost: string;
+  priceAtomic: string;
+  relevance: number;
+  health: "live";
+  preflightStatus: number;
+};
+
+export type IntelligenceQuote = {
+  id: string;
+  product: ProductType;
+  request: IntelligenceRequest;
+  requestHash: string;
+  providers: QuotedProvider[];
+  providerCostAtomic: string;
+  operationalBudgetAtomic: string;
+  genlayerReserveAtomic: string;
+  revenueReserveAtomic: string;
+  customerPriceAtomic: string;
+  customerPriceUsdc: string;
+  routingExplanation: string[];
+  status: "open" | "settled" | "expired" | "canceled";
+  createdAt: string;
+  expiresAt: string;
+  settledJobId?: string;
+};
+
 export type PricePlan = {
   id: "quick" | "standard" | "deep" | "procurement" | "quality";
   name: string;
@@ -45,6 +80,20 @@ export type PricePlan = {
   maxRetries: number;
   timeoutMinutes: number;
 };
+
+export function calculateQuotePrice(providerCostAtomic: number) {
+  const minimumAtomic = 1_000_000;
+  const customerPriceAtomic = Math.max(minimumAtomic, Math.ceil(providerCostAtomic / 0.6));
+  const operationalBudgetAtomic = Math.floor(customerPriceAtomic * 0.6);
+  const genlayerReserveAtomic = Math.ceil(customerPriceAtomic * 0.1);
+  const revenueReserveAtomic = customerPriceAtomic - operationalBudgetAtomic - genlayerReserveAtomic;
+  if (providerCostAtomic > operationalBudgetAtomic) throw new Error("Provider cost exceeds the 60% operational ceiling");
+  return { customerPriceAtomic, operationalBudgetAtomic, genlayerReserveAtomic, revenueReserveAtomic };
+}
+
+export function atomicToUsdc(atomic: number) {
+  return (atomic / 1_000_000).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
 
 export const pricePlans: Record<PricePlan["id"], PricePlan> = {
   quick: { id: "quick", name: "Quick Decision", amountAtomic: "10000", amountUsdc: "0.01", upstreamBudgetAtomic: "500000", maxProviders: 2, maxRetries: 1, timeoutMinutes: 3 },

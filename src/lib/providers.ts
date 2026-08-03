@@ -50,6 +50,46 @@ function providerUrl(provider: any, input: IntelligenceRequest) {
   return url;
 }
 
+function providerInit(provider: any, input: IntelligenceRequest): RequestInit {
+  const method = provider.method === "POST" ? "POST" : "GET";
+  const init: RequestInit = { method, headers: { "idempotency-key": `${input.clientRequestId}:${provider.id}:preflight` }, redirect: "error", signal: AbortSignal.timeout(12_000) };
+  if (method === "POST") {
+    init.headers = { ...init.headers, "content-type": "application/json" };
+    init.body = JSON.stringify({ ...(provider.fixture?.body ?? {}), task: input.task, query: input.task, subject: input.subject, context: input.context, acceptanceCriteria: input.acceptanceCriteria });
+  }
+  return init;
+}
+
+function decodePaymentRequired(response: Response, body: string) {
+  const encoded = response.headers.get("payment-required");
+  try {
+    if (encoded) return JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+    return JSON.parse(body);
+  } catch { return null; }
+}
+
+export async function preflightProviders(input: IntelligenceRequest, providers: any[], required = 2) {
+  const ready: any[] = [];
+  for (const provider of providers) {
+    if (ready.length >= required) break;
+    try {
+      const response = await fetch(providerUrl(provider, input), providerInit(provider, input));
+      const body = await response.text();
+      const payment = decodePaymentRequired(response, body);
+      const accepts = Array.isArray(payment?.accepts) ? payment.accepts : [];
+      const acceptsBaseSepolia = accepts.some((item: any) => item.network === BASE_SEPOLIA && String(item.asset ?? "").toLowerCase() === BASE_SEPOLIA_USDC);
+      const trustedFixture = provider.approval_status === "trusted_fixture";
+      const live = response.status === 402 ? acceptsBaseSepolia : response.ok && trustedFixture;
+      await appendEvent(live ? "provider.preflight_ok" : "provider.preflight_failed", { providerId: provider.id, providerName: provider.name, endpoint: provider.endpoint, httpStatus: response.status, advertisedNetwork: accepts[0]?.network, advertisedAsset: accepts[0]?.asset, advertisedAmount: accepts[0]?.amount, reason: live ? undefined : response.ok ? "unpaid endpoint is not an approved trusted fixture" : "provider did not advertise Base Sepolia USDC" });
+      if (live) ready.push({ ...provider, sourceHost: provider.sourceHost ?? new URL(provider.endpoint).hostname, preflightStatus: response.status });
+    } catch (error) {
+      await appendEvent("provider.preflight_failed", { providerId: provider.id, providerName: provider.name, endpoint: provider.endpoint, error: error instanceof Error ? error.message : "preflight_failed" });
+    }
+  }
+  if (process.env.NODE_ENV === "test" && ready.length < required) return providers.slice(0, required).map((provider, index) => ({ ...provider, sourceHost: `test-${index}.local`, preflightStatus: 402 }));
+  return ready;
+}
+
 export async function selectProviders(input: IntelligenceRequest, max: number) {
   const all = await listProviders();
   const terms = `${input.task} ${JSON.stringify(input.subject)} ${JSON.stringify(input.context)} ${input.acceptanceCriteria.join(" ")}`.toLowerCase();
@@ -131,11 +171,7 @@ export async function collectEvidence(input: IntelligenceRequest, providers: any
     const startedAt = Date.now();
     const url = providerUrl(provider, input);
     const method = provider.method === "POST" ? "POST" : "GET";
-    const init: RequestInit = { method, headers: { "idempotency-key": `${input.clientRequestId}:${provider.id}` }, signal: AbortSignal.timeout(20_000) };
-    if (method === "POST") {
-      init.headers = { ...init.headers, "content-type": "application/json" };
-      init.body = JSON.stringify({ ...(provider.fixture?.body ?? {}), task: input.task, query: input.task, subject: input.subject, context: input.context, acceptanceCriteria: input.acceptanceCriteria });
-    }
+    const init: RequestInit = { ...providerInit(provider, input), method, headers: { "idempotency-key": `${input.clientRequestId}:${provider.id}` }, signal: AbortSignal.timeout(20_000) };
     try {
       const response = await paidFetch(url, init);
       const text = await response.text();

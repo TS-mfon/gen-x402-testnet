@@ -4,6 +4,7 @@ export async function sha256(value: string) {
 }
 
 export function stableJson(value: unknown): string {
+  if (typeof value === "bigint") return JSON.stringify(value.toString());
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object") {
     return `{${Object.entries(value as Record<string, unknown>)
@@ -12,4 +13,8 @@ export function stableJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+export function jsonStringify(value: unknown, space?: number) {
+  return JSON.stringify(value, (_, entry) => typeof entry === "bigint" ? entry.toString() : entry, space);
 }

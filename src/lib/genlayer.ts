@@ -15,8 +15,8 @@ function configuredClient() {
 }
 function verdictFromStored(stored:string, transaction?:string):Verdict|null {
   if (!stored) return null;
-  const parsed=JSON.parse(stored) as {evidence_digest:string;result:{decision:Verdict["decision"];confidence:number;score:number}};
-  return {decision:parsed.result.decision,confidence:parsed.result.confidence,score:parsed.result.score,summary:`GenLayer validators finalized ${parsed.result.decision.replaceAll("_"," ")}.`,reasonCodes:["GENLAYER_FINALIZED"],evidenceDigest:parsed.evidence_digest,expiresAt:new Date(Date.now()+15*60_000).toISOString(),genlayerNetwork:"studionet",genlayerTransaction:transaction};
+  const parsed=JSON.parse(stored) as {evidence_digest:string;result:{decision:Verdict["decision"];confidence:number;score:number;combined_analysis?:string;provider_assessments?:Verdict["providerAssessments"];agreements?:string[];conflicts?:string[];reason_codes?:string[]}};
+  return {decision:parsed.result.decision,confidence:parsed.result.confidence,score:parsed.result.score,summary:parsed.result.combined_analysis || `GenLayer validators finalized ${parsed.result.decision.replaceAll("_"," ")}.`,combinedAnalysis:parsed.result.combined_analysis,providerAssessments:parsed.result.provider_assessments,agreements:parsed.result.agreements,conflicts:parsed.result.conflicts,reasonCodes:parsed.result.reason_codes?.length?parsed.result.reason_codes:["GENLAYER_FINALIZED"],evidenceDigest:parsed.evidence_digest,expiresAt:new Date(Date.now()+15*60_000).toISOString(),genlayerNetwork:"studionet",genlayerTransaction:transaction};
 }
 export async function readFinalized(input:IntelligenceRequest,transaction?:string){
   const configured=configuredClient(); if(!configured)return null;

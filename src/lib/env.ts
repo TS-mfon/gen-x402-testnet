@@ -3,7 +3,7 @@ import { z } from "zod";
 
 const schema = z.object({
   BLOB_READ_WRITE_TOKEN: z.string().optional(),
-  X402_TREASURY_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).default("0x4a53cFB1CCFf805246C28aBd1Ec56F8B56F4D08E"),
+  X402_TREASURY_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).default("0x42eB87cb7d1bb5A83cE15b4f2a34e1722Bd43f4b"),
   BASE_USDC_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).default("0x036CbD53842c5426634e7929541eC2318f3dCF7e"),
   X402_NETWORK: z.literal("eip155:84532").default("eip155:84532"),
   X402_FACILITATOR_URL: z.string().url().default("https://api.cdp.coinbase.com/platform/v2/x402"),
@@ -12,6 +12,8 @@ const schema = z.object({
   CDP_WALLET_SECRET: z.string().optional(),
   GENLAYER_CONTRACT_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   GENLAYER_SIGNER_PRIVATE_KEY: z.string().optional(),
+  CONTROL_CONTRACT_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).default("0x42eB87cb7d1bb5A83cE15b4f2a34e1722Bd43f4b"),
+  BASE_SEPOLIA_RPC_URL: z.string().url().default("https://sepolia.base.org"),
   X402_PROVIDERS_JSON: z.string().optional(),
   CDP_DISCOVERY_URL: z.string().url().default("https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?network=eip155:84532"),
   TESTNET_DAILY_BUDGET_ATOMIC: z.coerce.number().int().positive().default(5_000_000),
@@ -33,6 +35,8 @@ export const env = schema.parse({
   CDP_WALLET_SECRET: process.env.CDP_WALLET_SECRET,
   GENLAYER_CONTRACT_ADDRESS: process.env.GENLAYER_CONTRACT_ADDRESS,
   GENLAYER_SIGNER_PRIVATE_KEY: process.env.GENLAYER_SIGNER_PRIVATE_KEY,
+  CONTROL_CONTRACT_ADDRESS: process.env.CONTROL_CONTRACT_ADDRESS,
+  BASE_SEPOLIA_RPC_URL: process.env.BASE_SEPOLIA_RPC_URL,
   X402_PROVIDERS_JSON: process.env.X402_PROVIDERS_JSON,
   CDP_DISCOVERY_URL: process.env.CDP_DISCOVERY_URL,
   TESTNET_DAILY_BUDGET_ATOMIC: process.env.TESTNET_DAILY_BUDGET_ATOMIC,

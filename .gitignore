@@ -10,6 +10,9 @@ playwright-report
 *.tsbuildinfo
 __pycache__/
 *.pyc
+out/
+cache/
+broadcast/
 pk.md
 ops-pk.md
 ops-cdp-wallet.md

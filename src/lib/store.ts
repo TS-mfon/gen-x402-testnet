@@ -1,7 +1,7 @@
 import "server-only";
 import { get, list, put } from "@vercel/blob";
 import { env } from "@/lib/env";
-import type { IntelligenceRequest, JobStatus, PricePlan, Verdict } from "@/lib/domain";
+import type { IntelligenceQuote, IntelligenceRequest, JobStatus, PricePlan, Verdict } from "@/lib/domain";
 import { testnetCatalog } from "@/lib/testnet-catalog";
 
 export type Job = {
@@ -10,6 +10,7 @@ export type Job = {
   status: JobStatus;
   request_json: IntelligenceRequest;
   plan_id: string;
+  quote_id?: string;
   price_atomic: string;
   upstream_budget_atomic: string;
   upstream_spent_atomic: string;
@@ -17,6 +18,13 @@ export type Job = {
   attempts: number;
   error_code?: string;
   error_message?: string;
+  payment_transaction?: string;
+  payment_network?: string;
+  payment_payer?: string;
+  payment_amount_atomic?: string;
+  payment_settled_at?: string;
+  payment_proof_transaction?: string;
+  refund_transaction?: string;
   created_at: string;
   updated_at: string;
   expires_at: string;
@@ -27,10 +35,12 @@ const memory = globalThis as typeof globalThis & {
   __x402Jobs?: Map<string, Job>;
   __x402Verdicts?: Map<string, Verdict>;
   __x402Idempotency?: Map<string, string>;
+  __x402Quotes?: Map<string, IntelligenceQuote>;
 };
 memory.__x402Jobs ??= new Map();
 memory.__x402Verdicts ??= new Map();
 memory.__x402Idempotency ??= new Map();
+memory.__x402Quotes ??= new Map();
 
 const usesBlob = Boolean(env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID);
 const namespace = "testnet";
@@ -40,6 +50,7 @@ const executionPath = (id: string) => `${namespace}/jobs/${id}/execution.json`;
 const evidencePath = (id: string) => `${namespace}/jobs/${id}/evidence.json`;
 const idempotencyPath = (key: string) => `${namespace}/idempotency/${key}.json`;
 const budgetPath = (date: string) => `${namespace}/budgets/${date}.json`;
+const quotePath = (id: string) => `${namespace}/quotes/${id}.json`;
 
 async function readJson<T>(pathname: string): Promise<Stored<T> | null> {
   const result = await get(pathname, { access: "private", useCache: false });
@@ -102,14 +113,56 @@ export async function consumeDailyBudget(amountAtomic: number) {
   throw new Error("Daily budget update failed");
 }
 
-export async function createJob(input: IntelligenceRequest, plan: PricePlan, key: string) {
+export async function saveQuote(quote: IntelligenceQuote) {
+  if (!usesBlob) { memory.__x402Quotes!.set(quote.id, quote); return quote; }
+  await put(quotePath(quote.id), JSON.stringify(quote), {
+    access: "private", addRandomSuffix: false, allowOverwrite: false,
+    contentType: "application/json", cacheControlMaxAge: 0,
+  });
+  await appendEvent("quote.created", { quoteId: quote.id, product: quote.product, requestHash: quote.requestHash, providerIds: quote.providers.map(provider => provider.id), providerCostAtomic: quote.providerCostAtomic, customerPriceAtomic: quote.customerPriceAtomic, expiresAt: quote.expiresAt });
+  return quote;
+}
+
+export async function getQuote(id: string) {
+  if (!usesBlob) return memory.__x402Quotes!.get(id) ?? null;
+  return (await readJson<IntelligenceQuote>(quotePath(id)))?.value ?? null;
+}
+
+export async function settleQuote(id: string, jobId: string) {
+  if (!usesBlob) {
+    const quote = memory.__x402Quotes!.get(id);
+    if (!quote) throw new Error("quote_not_found");
+    if (quote.status === "settled") return quote;
+    const settled = { ...quote, status: "settled" as const, settledJobId: jobId };
+    memory.__x402Quotes!.set(id, settled);
+    return settled;
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const stored = await readJson<IntelligenceQuote>(quotePath(id));
+    if (!stored) throw new Error("quote_not_found");
+    if (stored.value.status === "settled") return stored.value;
+    if (new Date(stored.value.expiresAt) <= new Date()) throw new Error("quote_expired");
+    const settled = { ...stored.value, status: "settled" as const, settledJobId: jobId };
+    try {
+      await writeJson(quotePath(id), settled, stored.etag);
+      await appendEvent("quote.settled", { quoteId: id, jobId, customerPriceAtomic: settled.customerPriceAtomic });
+      return settled;
+    } catch {
+      if (attempt === 2) throw new Error("quote_settlement_conflict");
+    }
+  }
+  throw new Error("quote_settlement_conflict");
+}
+
+export async function createJob(input: IntelligenceRequest, plan: PricePlan, key: string, quote?: IntelligenceQuote) {
   if (!usesBlob) {
     const existingId = memory.__x402Idempotency!.get(key);
     if (existingId) return memory.__x402Jobs!.get(existingId)!;
     const now = new Date();
     const job: Job = {
-      id: crypto.randomUUID(), product: input.product, status: "payment_settled", request_json: input,
-      plan_id: plan.id, price_atomic: plan.amountAtomic, upstream_budget_atomic: plan.upstreamBudgetAtomic,
+      id: crypto.randomUUID(), product: input.product, status: "payment_pending", request_json: input,
+      plan_id: plan.id, price_atomic: quote?.customerPriceAtomic ?? plan.amountAtomic, upstream_budget_atomic: quote?.operationalBudgetAtomic ?? plan.upstreamBudgetAtomic,
+      quote_id: quote?.id,
       upstream_spent_atomic: "0", max_providers: plan.maxProviders, attempts: 0,
       created_at: now.toISOString(), updated_at: now.toISOString(),
       expires_at: new Date(now.getTime() + plan.timeoutMinutes * 60_000).toISOString()
@@ -126,8 +179,9 @@ export async function createJob(input: IntelligenceRequest, plan: PricePlan, key
   }
   const now = new Date();
   const job: Job = {
-    id: crypto.randomUUID(), product: input.product, status: "payment_settled", request_json: input,
-    plan_id: plan.id, price_atomic: plan.amountAtomic, upstream_budget_atomic: plan.upstreamBudgetAtomic,
+    id: crypto.randomUUID(), product: input.product, status: "payment_pending", request_json: input,
+    plan_id: plan.id, price_atomic: quote?.customerPriceAtomic ?? plan.amountAtomic, upstream_budget_atomic: quote?.operationalBudgetAtomic ?? plan.upstreamBudgetAtomic,
+    quote_id: quote?.id,
     upstream_spent_atomic: "0", max_providers: plan.maxProviders, attempts: 0,
     created_at: now.toISOString(), updated_at: now.toISOString(),
     expires_at: new Date(now.getTime() + plan.timeoutMinutes * 60_000).toISOString()
@@ -171,6 +225,77 @@ export async function updateJob(id: string, status: JobStatus, extra: { errorCod
     }
   }
   return null;
+}
+
+export async function savePaymentSettlement(id: string, settlement: { transaction: string; network: string; payer: string; amountAtomic: string }) {
+  const paymentFields = {
+    payment_transaction: settlement.transaction,
+    payment_network: settlement.network,
+    payment_payer: settlement.payer,
+    payment_amount_atomic: settlement.amountAtomic,
+    payment_settled_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (!usesBlob) {
+    const job = memory.__x402Jobs!.get(id);
+    if (!job) return null;
+    Object.assign(job, paymentFields);
+    return job;
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const stored = await readJson<Job>(jobPath(id));
+    if (!stored) return null;
+    try {
+      await writeJson(jobPath(id), { ...stored.value, ...paymentFields }, stored.etag);
+      await appendAudit(id, "payment.receipt_saved", settlement);
+      return { ...stored.value, ...paymentFields };
+    } catch {
+      if (attempt === 2) throw new Error("Payment settlement update failed after retries");
+    }
+  }
+  return null;
+}
+
+export async function markPaymentProved(id: string, proofTransaction?: string) {
+  const job = await getJob(id);
+  if (!job) return null;
+  if (job.status !== "payment_pending" && job.status !== "payment_settled") return job;
+  if (!usesBlob) {
+    job.status = "payment_settled";
+    job.payment_proof_transaction = proofTransaction;
+    job.updated_at = new Date().toISOString();
+    return job;
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const stored = await readJson<Job>(jobPath(id));
+    if (!stored) return null;
+    const next = { ...stored.value, status: "payment_settled" as const, payment_proof_transaction: proofTransaction, updated_at: new Date().toISOString() };
+    try {
+      await writeJson(jobPath(id), next, stored.etag);
+      await appendAudit(id, "payment.proved", { proofTransaction });
+      return next;
+    } catch {
+      if (attempt === 2) throw new Error("Payment proof update failed after retries");
+    }
+  }
+  return null;
+}
+
+export async function markRefunded(id: string, refundTransaction: string) {
+  const job = await getJob(id);
+  if (!job) return null;
+  if (!usesBlob) {
+    job.status = "refunded";
+    job.refund_transaction = refundTransaction;
+    job.updated_at = new Date().toISOString();
+    return job;
+  }
+  const stored = await readJson<Job>(jobPath(id));
+  if (!stored) return null;
+  const next = { ...stored.value, status: "refunded" as const, refund_transaction: refundTransaction, updated_at: new Date().toISOString() };
+  await writeJson(jobPath(id), next, stored.etag);
+  await appendAudit(id, "job.refunded", { refundTransaction });
+  return next;
 }
 
 export async function pendingJobs(limit = 10) {
