@@ -36,6 +36,7 @@ const usesBlob = Boolean(env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID)
 const namespace = "testnet";
 const jobPath = (id: string) => `${namespace}/jobs/${id}/snapshot.json`;
 const verdictPath = (id: string) => `${namespace}/jobs/${id}/verdict.json`;
+const executionPath = (id: string) => `${namespace}/jobs/${id}/execution.json`;
 const idempotencyPath = (key: string) => `${namespace}/idempotency/${key}.json`;
 const budgetPath = (date: string) => `${namespace}/budgets/${date}.json`;
 
@@ -188,6 +189,17 @@ export async function saveVerdict(jobId: string, verdict: Verdict) {
 export async function getVerdict(jobId: string) {
   if (!usesBlob) return memory.__x402Verdicts!.get(jobId) ?? null;
   return (await readJson<Verdict>(verdictPath(jobId)))?.value ?? null;
+}
+
+export type JobExecution = { transaction: string; evidenceDigest: string; submittedAt: string };
+export async function saveExecution(jobId: string, execution: JobExecution) {
+  if (!usesBlob) return;
+  await writeJson(executionPath(jobId), execution);
+  await appendAudit(jobId, "genlayer.submitted", execution);
+}
+export async function getExecution(jobId: string) {
+  if (!usesBlob) return null;
+  return (await readJson<JobExecution>(executionPath(jobId)))?.value ?? null;
 }
 
 export async function listProviders() {
