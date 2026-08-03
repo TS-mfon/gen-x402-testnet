@@ -2,6 +2,7 @@
 import { createContext, useContext, useMemo, useState } from "react";
 import { ExactEvmScheme } from "@x402/evm";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
+import { getTypesForEIP712Domain, serializeTypedData } from "viem";
 
 type NetworkChoice = "testnet";
 type EthereumProvider = { request(args: { method: string; params?: unknown[] }): Promise<unknown> };
@@ -24,7 +25,16 @@ function injectedSigner(address: string) {
     address: address as `0x${string}`,
     signTypedData: async ({ domain, types, primaryType, message }: { domain: Record<string, unknown>; types: Record<string, unknown>; primaryType: string; message: Record<string, unknown> }) => {
       if (!window.ethereum) throw new Error("Wallet provider unavailable");
-      return await window.ethereum.request({ method: "eth_signTypedData_v4", params: [address, JSON.stringify({ domain, types, message, primaryType })] }) as `0x${string}`;
+      const typedData = serializeTypedData({
+        domain,
+        message,
+        primaryType,
+        types: {
+          EIP712Domain: getTypesForEIP712Domain({ domain }),
+          ...types,
+        } as any,
+      });
+      return await window.ethereum.request({ method: "eth_signTypedData_v4", params: [address, typedData] }) as `0x${string}`;
     }
   };
 }
