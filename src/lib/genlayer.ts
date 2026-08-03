@@ -33,6 +33,7 @@ export async function finalizeEvaluation(input:IntelligenceRequest,transaction:s
   const configured=configuredClient(); if(!configured)return null;
   const tx=await configured.client.getTransaction({hash:transaction as Hex & {length:66}});
   if(tx.statusName===TransactionStatus.READY_TO_FINALIZE){await configured.client.finalizeTransaction({account:configured.account,txId:transaction as Hex & {length:66}});return null;}
+  if(tx.statusName===TransactionStatus.CANCELED)return { verdict: null, failed: true };
   if(tx.statusName!==TransactionStatus.FINALIZED)return null;
   const verdict=await readFinalized(input,transaction);
   return verdict ? { verdict, failed: false } : { verdict: null, failed: true };
