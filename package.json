@@ -1,0 +1,62 @@
+{
+  "name": "gen-x402-testnet",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "contracts:lint": "uvx --python 3.12 --from genvm-linter genvm-lint check contracts/genlayer/IntelligenceGateway.py"
+  },
+  "dependencies": {
+    "@coinbase/cdp-sdk": "^1.54.0",
+    "@fontsource/barlow-condensed": "^5.3.0",
+    "@fontsource/bodoni-moda": "^5.3.0",
+    "@fontsource/chivo": "^5.3.0",
+    "@types/three": "^0.179.0",
+    "@vercel/blob": "^2.6.1",
+    "@x402/core": "^2.20.0",
+    "@x402/evm": "^2.20.0",
+    "@x402/extensions": "^2.20.0",
+    "@x402/fetch": "^2.20.0",
+    "@x402/next": "^2.20.0",
+    "@x402/svm": "^2.20.0",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "es-abstract": "^1.24.2",
+    "genlayer-js": "^1.1.8",
+    "jose": "^6.1.0",
+    "lucide-react": "^0.468.0",
+    "next": "16.2.12",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "server-only": "^0.0.1",
+    "three": "^0.179.1",
+    "viem": "^2.55.8",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "16.2.12",
+    "jsdom": "^25.0.1",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "axios": "1.19.0",
+    "postcss": "8.5.25",
+    "sharp": "0.35.3"
+  }
+}

@@ -1,0 +1,3 @@
+import { NextResponse } from "next/server";
+import { getJob, getVerdict } from "@/lib/store";
+export async function GET(_:Request,{params}:{params:Promise<{id:string}>}){const {id}=await params;const job=await getJob(id);if(!job)return NextResponse.json({error:"job_not_found"},{status:404});const verdict=await getVerdict(id);return NextResponse.json({job:{id:job.id,product:job.product,status:job.status,plan:job.plan_id,createdAt:job.created_at,updatedAt:job.updated_at,expiresAt:job.expires_at,error:job.error_code?{code:job.error_code,message:job.error_message}:undefined},verdict,beta:"GenLayer Studionet-anchored paid beta"});}
