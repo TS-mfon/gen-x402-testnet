@@ -69,7 +69,7 @@ This file records corrections validated in the Base Sepolia testnet branch. Appl
 - [ ] Read live Base Sepolia treasury and wallet balances on analytics pages.
 - [x] Deploy and verify the separate admin Vercel project at `https://gen-x402-admin.vercel.app`.
 - [x] Deploy the redesigned analytics Vercel project at `https://gen-x402-analytics.vercel.app`.
-- [ ] Deploy the updated gateway only after the compact GenLayer contract address is available.
+- [ ] Deploy the updated gateway only after the compact GenLayer contract address is available. Contract and Vercel production environment are now ready; the remaining action is the Vercel production build/upload retry.
 
 ## Deployment
 
