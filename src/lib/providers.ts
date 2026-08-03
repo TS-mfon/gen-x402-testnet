@@ -41,7 +41,7 @@ export async function selectProviders(input: IntelligenceRequest, max: number) {
     .slice(0, Math.min(max, 2));
 }
 
-export async function collectEvidence(input: IntelligenceRequest, providers: any[]) {
+export async function collectEvidence(input: IntelligenceRequest, providers: any[], jobId?: string) {
   const hasCdpWallet = Boolean(env.CDP_API_KEY_ID && env.CDP_API_KEY_SECRET && env.CDP_WALLET_SECRET);
   if (!hasCdpWallet) return [{ id: crypto.randomUUID(), providerId: "gateway", retrievedAt: new Date().toISOString(), rawResponseHash: await sha256(stableJson(input)), costAtomic: "0", claims: [{ statement: "CDP testnet operations wallet is not configured", value: { task: input.task }, confidence: 0 }] }];
   const total = providers.reduce((sum, provider) => sum + Number(provider.price_atomic), 0);
@@ -66,10 +66,10 @@ export async function collectEvidence(input: IntelligenceRequest, providers: any
       let value: unknown;
       try { value = JSON.parse(text); } catch { value = { text: text.slice(0, 50_000) }; }
       const receipt = response.headers.get("payment-response") ?? response.headers.get("x-payment-response") ?? undefined;
-      await appendEvent("provider.succeeded", { providerId: provider.id, endpoint: provider.endpoint, costAtomic: provider.price_atomic, latencyMs: Date.now() - startedAt, paymentReceipt: receipt });
+      await appendEvent("provider.succeeded", { jobId, jobClientRequestId: input.clientRequestId, providerId: provider.id, providerName: provider.name, endpoint: url.toString(), method, network: provider.network, asset: provider.asset, costAtomic: provider.price_atomic, latencyMs: Date.now() - startedAt, httpStatus: response.status, contentType: response.headers.get("content-type"), responseBytes: Buffer.byteLength(text), responsePreview: text.slice(0, 2000), paymentReceipt: receipt });
       evidence.push({ id: crypto.randomUUID(), providerId: provider.id, retrievedAt: new Date().toISOString(), rawResponseHash: await sha256(text), costAtomic: String(provider.price_atomic), claims: [{ statement: `Response from ${provider.name}`, value, confidence: .8 }], paymentReceipt: receipt });
     } catch (error) {
-      await appendEvent("provider.failed", { providerId: provider.id, endpoint: provider.endpoint, costAtomic: provider.price_atomic, latencyMs: Date.now() - startedAt, error: error instanceof Error ? error.message : "Unknown provider error" });
+      await appendEvent("provider.failed", { jobId, jobClientRequestId: input.clientRequestId, providerId: provider.id, providerName: provider.name, endpoint: url.toString(), method, network: provider.network, asset: provider.asset, costAtomic: provider.price_atomic, latencyMs: Date.now() - startedAt, error: error instanceof Error ? error.message : "Unknown provider error" });
     }
   }
   if (evidence.length) return evidence;
