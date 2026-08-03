@@ -34,8 +34,8 @@ This file records corrections validated in the Base Sepolia testnet branch. Appl
 - [x] Allow only one automatic GenLayer retry.
 - [x] Handle canceled and non-finalized GenLayer transactions without duplicate submissions.
 - [x] Save evidence and verdict hashes to the Base Sepolia control contract.
-- [ ] Redeploy the compact-payload intelligent contract on Studionet. Blocked on the shared Studionet RPC rate limit (`500 requests/hour`; retry window reported as approximately one hour on August 3, 2026).
-- [ ] Update `GENLAYER_CONTRACT_ADDRESS` in Vercel.
+- [x] Redeploy the compact-payload intelligent contract on Studionet at `0x2C0ab7014617160149707653eE0Faff578e29C88`.
+- [x] Update `GENLAYER_CONTRACT_ADDRESS` in Vercel.
 - [ ] Complete one live payment-to-final-verdict smoke test.
 
 ## Refunds and reconciliation
@@ -69,7 +69,7 @@ This file records corrections validated in the Base Sepolia testnet branch. Appl
 - [ ] Read live Base Sepolia treasury and wallet balances on analytics pages.
 - [x] Deploy and verify the separate admin Vercel project at `https://gen-x402-admin.vercel.app`.
 - [x] Deploy the redesigned analytics Vercel project at `https://gen-x402-analytics.vercel.app`.
-- [ ] Deploy the updated gateway only after the compact GenLayer contract address is available. Contract and Vercel production environment are now ready; the remaining action is the Vercel production build/upload retry.
+- [x] Deploy the updated gateway at `https://gen-x402-testnet.vercel.app` with the compact GenLayer contract and Base Sepolia control treasury.
 
 ## Deployment
 

@@ -144,8 +144,9 @@ X-Quote-Id: <quote-id>
 - Base Sepolia USDC: `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
 - Platform reporter: `0x4a53cFB1CCFf805246C28aBd1Ec56F8B56F4D08E`
 - Admin: `0x5905c9Dea6Ae52AA0947D8F7F218263889eDfC4E`
+- GenLayer Studionet compact judge: `0x2C0ab7014617160149707653eE0Faff578e29C88`
 
-The compact-evidence GenLayer contract must be redeployed before the next paid end-to-end smoke test. Do not use the older deployment for production validation.
+The compact-evidence GenLayer contract was finalized in transaction `0x08f111161f6bb9ed33dd6133354f5821d68b5c342a1e8565306c7a4a90d14c12` and is configured in the live testnet gateway.
 
 ## Required Vercel Configuration
 
