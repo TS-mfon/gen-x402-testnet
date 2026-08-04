@@ -1,174 +1,392 @@
 # Gen-X402 Testnet Gateway
 
-**Pay for Decisions, Not Outputs.**
+> **Pay for Decisions, Not Outputs.**
 
-Gen-X402 is a database-free, serverless Base Sepolia validation environment for crypto agents. A client first receives an exact quote for two relevant x402 providers. After the client pays testnet USDC, the treasury records the settlement, a bounded platform wallet purchases both provider responses, and GenLayer compares and combines their compact conclusions into one decision.
+Gen-X402 is a serverless decision layer for crypto applications and autonomous agents. A caller describes a decision, receives a free quote for two relevant x402 services, pays the exact quote in Base Sepolia USDC, and receives one GenLayer-anchored conclusion produced from both provider outputs.
 
-- Gateway: `https://gen-x402-testnet.vercel.app`
-- Analytics: `https://gen-x402-analytics.vercel.app`
-- Planned admin deployment: `https://gen-x402-admin.vercel.app`
+This repository is the Base Sepolia validation deployment. It intentionally does not accept mainnet funds.
+
+## Live Applications
+
+| Application | URL | Purpose |
+|---|---|---|
+| Testnet Gateway | `https://gen-x402-testnet.vercel.app` | Landing page, human workflows, API keys, API, and documentation |
+| Analytics | `https://gen-x402-analytics.vercel.app` | Read-only payment-to-verdict telemetry and traces |
+| Admin | `https://gen-x402-admin.vercel.app` | Protected operational controls and diagnostics |
+| OpenAPI | `https://gen-x402-testnet.vercel.app/api/openapi.json` | Machine-readable OpenAPI 3.1 contract |
+
+## What Problem It Solves
+
+An agent should not execute a treasury payment, select a service provider, approve another agent’s work, or classify token risk because one API returned a plausible-looking response. Gen-X402 separates **data acquisition** from **decision accountability**:
+
+1. Route the request to two independent paid services.
+2. Enforce a customer-approved spending ceiling before execution.
+3. Validate that each provider returned coherent, usable evidence.
+4. Submit only compact conclusions to GenLayer.
+5. Return a single decision with agreements, conflicts, confidence, and provider-quality assessments.
+
+The product is the final reasoned decision, not two disconnected API payloads.
+
+## System Architecture
+
+```text
+Human wallet or agent payer
+          │
+          ├── POST /api/v1/quote ──────────────── free
+          │          │
+          │          └── provider ranking + live Base Sepolia preflight
+          │
+          └── POST /api/v1/<product> ──────────── x402 paid
+                     │
+                     ├── Base Sepolia USDC → control-contract treasury
+                     ├── payment proof persisted and recorded on-chain
+                     ├── capped CDP operations wallet pays provider A
+                     ├── capped CDP operations wallet pays provider B
+                     ├── outputs validated and compacted
+                     ├── platform wallet submits compact evidence to GenLayer
+                     └── GET /api/v1/jobs/:id returns final verdict
+```
+
+### Infrastructure
+
+- **Frontend and API:** Next.js 16 serverless functions on Vercel.
+- **State:** private Vercel Blob objects; no SQL database.
+- **Customer payment:** x402 v2 exact payments in Base Sepolia USDC.
+- **Upstream payment:** dedicated capped CDP API-key wallet.
+- **Treasury and controls:** `GenX402Control` on Base Sepolia.
+- **Decision consensus:** compact-evidence intelligent contract on GenLayer Studionet.
+- **Background processing:** Vercel cron and poll-driven serverless continuation.
+- **Operations:** separate protected analytics and admin deployments.
+
+No VPS, local daemon, persistent worker, or developer computer is required in production.
+
+## Financial Policy
+
+Every quote is calculated from live provider prices.
+
+```text
+customerPrice = max(1 USDC, ceil(combinedProviderCost / 0.60))
+operationalBudget = floor(customerPrice × 0.60)
+genLayerReserve = ceil(customerPrice × 0.10)
+protocolReserve = customerPrice - operationalBudget - genLayerReserve
+```
+
+Invariants:
+
+- Customer minimum: **1 USDC**.
+- Provider allocation: **60% maximum**.
+- Protocol revenue/reserve: **30% minimum**.
+- GenLayer allocation: **10% minimum**.
+- The exact provider pair and provider cost are frozen into the quote.
+- Unused provider allocation remains in the treasury.
+- A provider purchase cannot exceed the quote’s operational budget.
 
 ## Products
 
-- Crypto Investigation Agent
-- Agent Procurement Gateway
-- Pay-Per-Decision API
-- Agent Quality-Control Gateway
-- Unified x402 Intelligence Gateway
+| Product | Endpoint | Use case |
+|---|---|---|
+| Intelligence Gateway | `POST /api/v1/gateway` | General request routing across provider capabilities |
+| Investigation | `POST /api/v1/investigate` | Wallet, token, protocol, transaction, repository, and risk investigation |
+| Procurement | `POST /api/v1/procure` | Compare x402 or agent services and select the strongest provider |
+| Decision | `POST /api/v1/decide` | Compact allow, deny, escalate, or risk decision for machine consumption |
+| Quality Control | `POST /api/v1/quality-check` | Evaluate agent work against explicit acceptance criteria |
 
-## Architecture
+All product endpoints are x402-protected. API keys authenticate agents but never bypass per-call payment.
 
-- Next.js 16 serverless functions on Vercel
-- Private Vercel Blob objects for job snapshots, evidence, verdicts, idempotency, and audit events
-- `@x402/next` for customer payment enforcement
-- `@x402/fetch` and a dedicated CDP operations wallet for upstream provider payments
-- Base Sepolia control contract for treasury custody, allocation ceilings, payment proofs, job hashes, API-key hashes, pause controls, timelocks, and refunds
-- GenLayer Studionet intelligent contract for two-source comparison and consensus
-- No SQL database, VPS, local daemon, or persistent worker
+## API Quickstart
 
-## Decision Lifecycle
+### 1. Create an API key
 
-1. Submit the intended request to `POST /api/v1/quote` without payment.
-2. The gateway ranks registered providers by product capability, request relevance, availability, quality, and price.
-3. Candidate providers are preflighted. A live provider must advertise Base Sepolia USDC through x402 unless it is explicitly configured as a trusted fixture.
-4. The quote freezes two providers, both prices, customer amount, allocation, request hash, and a 15-minute expiry.
-5. Repeat the identical request against the paid product endpoint with the quote ID.
-6. x402 verifies and settles customer USDC directly to the control-contract treasury.
-7. The settlement hook records payer, amount, settlement transaction, quote, request hash, and job before execution is unlocked.
-8. The platform operations wallet pays the two quoted upstream providers.
-9. The gateway rejects binary, empty, or incoherent outputs and requires two independent usable responses.
-10. Only compact provider conclusions, claims, confidence, and limitations are sent to GenLayer.
-11. GenLayer compares agreements and conflicts, combines the evidence, and finalizes a verdict.
-12. A paid job that cannot complete attempts a full treasury refund.
+Humans can use:
 
-## Pricing Policy
+```text
+https://gen-x402-testnet.vercel.app/api-keys
+```
 
-- Minimum customer charge: **1 USDC**.
-- Maximum provider allocation: **60%** of customer payment.
-- Minimum GenLayer reserve: **10%**.
-- Minimum protocol reserve/revenue: **30%**.
-- Customer price: `max(1 USDC, quoted provider cost / 0.60)`.
-- Unused operational allocation remains in the treasury.
-- Execution uses the exact provider pair and costs fixed in the quote.
+Agents can self-enroll without a browser wallet.
 
-## API Documentation
+#### Request a proof-of-work challenge
 
-### Create a Quote
+```bash
+curl -sS https://gen-x402-testnet.vercel.app/api/v1/keys/challenge
+```
 
-`POST /api/v1/quote`
+The challenge expires after five minutes. Find a nonce where:
 
-```json
-{
-  "product": "decision",
-  "task": "Should this autonomous agent approve the proposed vendor payment?",
-  "subject": {
-    "chainId": "eip155:84532",
-    "address": "0x0000000000000000000000000000000000000000"
-  },
-  "context": {},
-  "acceptanceCriteria": ["Use two independent sources"],
-  "riskLevel": "medium",
-  "clientRequestId": "client-generated-unique-id"
+```text
+sha256(challenge + ":" + nonce)
+```
+
+starts with the returned number of zero hexadecimal characters.
+
+#### Node.js walletless-agent enrollment
+
+```js
+import { createHash } from "node:crypto";
+
+const baseUrl = "https://gen-x402-testnet.vercel.app";
+const challengeResponse = await fetch(baseUrl + "/api/v1/keys/challenge");
+const { challenge, difficulty } = await challengeResponse.json();
+const prefix = "0".repeat(difficulty);
+
+let nonce = 0;
+while (true) {
+  const digest = createHash("sha256")
+    .update(challenge + ":" + nonce)
+    .digest("hex");
+  if (digest.startsWith(prefix)) break;
+  nonce += 1;
 }
+
+const response = await fetch(baseUrl + "/api/v1/keys", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    mode: "agent",
+    agentPublicKey: "did:key:z6Mk...durable-agent-identity",
+    challenge,
+    nonce: String(nonce)
+  })
+});
+
+const issued = await response.json();
+if (!response.ok) throw new Error(issued.message ?? issued.error);
+
+// issued.apiKey is displayed exactly once.
+// Store it in an encrypted secret manager immediately.
+console.log({ keyId: issued.keyId, expiresAt: issued.expiresAt });
 ```
 
-The response includes:
+The on-chain registry stores the key hash, owner hash, expiry, scopes, rate-limit metadata, and active state. It never stores the plaintext secret.
 
-- Exact provider pair and routing explanation
-- Individual and combined provider cost
-- Customer USDC amount
-- Operational, GenLayer, and protocol allocations
-- Request hash
-- Quote ID and expiry
+Verify a stored key without making a payment:
 
-### Execute a Paid Request
+```bash
+curl -sS https://gen-x402-testnet.vercel.app/api/v1/keys/verify \
+  -H "X-API-Key: $GEN_X402_API_KEY"
+```
+
+### 2. Create a free quote
+
+```bash
+curl -sS https://gen-x402-testnet.vercel.app/api/v1/quote \
+  -H "content-type: application/json" \
+  --data '{
+    "task": "Should this treasury approve the proposed vendor payment?",
+    "subject": {
+      "chainId": "eip155:84532",
+      "address": "0x1111111111111111111111111111111111111111"
+    },
+    "context": {
+      "amount": "2500 USDC",
+      "invoiceId": "INV-2026-1042"
+    },
+    "acceptanceCriteria": [
+      "Confirm the destination belongs to the named vendor",
+      "Identify material exploit, sanctions, or scam evidence"
+    ],
+    "riskLevel": "high",
+    "requestedPlan": "standard",
+    "clientRequestId": "treasury-invoice-1042-v1"
+  }'
+```
+
+The response freezes:
+
+- Quote ID and 15-minute expiry.
+- Product and normalized request hash.
+- Two selected provider IDs, capabilities, hosts, prices, relevance, and preflight status.
+- Combined provider cost.
+- Exact customer USDC charge.
+- Provider, GenLayer, and protocol allocations.
+- Human-readable routing explanation.
+
+### 3. Pay and execute with an x402 client
+
+Install:
+
+```bash
+npm install @coinbase/cdp-sdk @x402/fetch
+```
+
+```js
+import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
+import { wrapFetchWithPayment } from "@x402/fetch";
+
+const payer = new CdpX402Client({
+  apiKeyId: process.env.CDP_API_KEY_ID,
+  apiKeySecret: process.env.CDP_API_KEY_SECRET,
+  walletSecret: process.env.CDP_WALLET_SECRET,
+  environment: "development",
+  walletConfig: { type: "eoa", accountName: "my-testnet-agent" },
+  spendControls: { perRequest: "2.00 USDC", global: "10.00 USDC" }
+});
+
+const paidFetch = wrapFetchWithPayment(fetch, payer);
+const response = await paidFetch(
+  `https://gen-x402-testnet.vercel.app/api/v1/decide?quoteId=${quote.id}`,
+  {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-client-type": "agent",
+      "x-api-key": process.env.GEN_X402_API_KEY
+    },
+    body: JSON.stringify(request)
+  }
+);
+
+const accepted = await response.json();
+```
+
+Do not manually construct x402 headers. The payment client reads the `402 Payment Required` challenge, signs the Base Sepolia USDC authorization, and retries.
+
+The paid request body must match the quote exactly. Any material change returns `quote_request_mismatch`.
+
+### 4. Poll the job
+
+```bash
+curl -sS https://gen-x402-testnet.vercel.app/api/v1/jobs/$JOB_ID
+```
+
+Normal lifecycle:
 
 ```text
-POST /api/v1/gateway
-POST /api/v1/investigate
-POST /api/v1/procure
-POST /api/v1/decide
-POST /api/v1/quality-check
+payment_pending
+payment_settled
+planning
+providers_selected
+evidence_requested
+evidence_collected
+evidence_normalized
+genlayer_submitted
+genlayer_pending
+verdict_finalized
+response_ready
 ```
 
-Append `?quoteId=<quote-id>` or send `X-Quote-Id: <quote-id>`. The JSON body must match the quoted request exactly. Without a valid payment the route returns an x402 `402 Payment Required` challenge. After settlement it returns `202 Accepted` and a polling URL.
-
-### Poll a Job
-
-`GET /api/v1/jobs/:id`
-
-The JSON response includes:
-
-- Job and payment state
-- Quote ID and customer price
-- Normalized provider records
-- Provider claims, recommendations, confidence, limitations, and costs
-- GenLayer submission transaction and attempt count
-- Final GenLayer verdict
-
-The web interface offers both a rendered human view and raw JSON for agents and debugging.
-
-### API-Key Enrollment
-
-Human or wallet-backed enrollment:
-
-`POST /api/v1/keys`
-
-Walletless agent enrollment:
-
-1. `GET /api/v1/keys/challenge`
-2. Find a nonce satisfying the returned proof-of-work difficulty.
-3. Submit `mode`, agent identifier, challenge, and nonce to `POST /api/v1/keys`.
-
-The API secret is shown once and cannot be recovered. Only the key hash and owner hash are registered on-chain.
-
-Agent request headers:
+Recovery and failure states:
 
 ```text
-X-Client-Type: agent
-X-API-Key: <key-id>.<one-time-secret>
-X-Quote-Id: <quote-id>
+refund_pending
+refunded
+credited
+failed
 ```
 
-### Idempotency and Duplicate Protection
+Poll every 3–5 seconds with exponential backoff. `202 Accepted` is not a verdict; wait for `response_ready` or a terminal failure state.
 
-- `clientRequestId` identifies the logical request.
-- A paid quote is bound to one request hash.
-- Replaying a settled quote returns the existing job.
-- Provider calls use provider-specific idempotency keys.
-- GenLayer submission is checkpointed and allows one automatic retry only.
+## Canonical Request Schema
+
+| Field | Type | Rules |
+|---|---|---|
+| `task` | string | Required; 10–4,000 characters |
+| `subject.chainId` | string | Optional; maximum 64 characters |
+| `subject.address` | string | Optional; maximum 128 characters |
+| `subject.url` | URL | Optional public URL; maximum 2,048 characters |
+| `subject.repository` | string | Optional repository identifier |
+| `context` | object | Optional structured facts; no secrets |
+| `acceptanceCriteria` | string[] | Maximum 20 items; each 3–500 characters |
+| `riskLevel` | enum | `low`, `medium`, or `high`; default `medium` |
+| `requestedPlan` | enum | `quick`, `standard`, `deep`, or `quality` |
+| `clientRequestId` | string | Required for execution; 8–128 characters |
+| `callbackUrl` | URL | Optional; polling remains authoritative |
+
+## Job Response
+
+`GET /api/v1/jobs/:id` returns:
+
+- `job`: payment, plan, status, budget, timestamps, and structured error state.
+- `evidence`: normalized provider claims, recommendations, confidence, limitations, and cost.
+- `execution`: GenLayer transaction, submission attempts, and checkpoint state.
+- `verdict`: decision, confidence, score, summary, combined analysis, agreements, conflicts, provider assessments, reason codes, expiry, and GenLayer transaction.
+
+Full upstream payloads remain in private telemetry. GenLayer receives only compact provider conclusions and supporting claims to avoid validator overload and timeout failures.
+
+## Idempotency and Duplicate Protection
+
+- `clientRequestId` identifies one logical caller request.
+- The quote stores the normalized request hash.
+- A settled quote creates at most one job.
+- Replaying a settled quote returns the existing job with `duplicate: true`.
+- Provider calls receive deterministic provider-specific idempotency keys.
+- GenLayer submission is checkpointed and does not repeat after a recorded transaction.
+
+## Error Reference
+
+| Status | Error | Meaning |
+|---|---|---|
+| 400 | `invalid_json` | Request body is not valid JSON |
+| 401 | `api_key_required` | Agent authentication headers are missing |
+| 401 | `invalid_api_key` | Key is wrong, inactive, or expired |
+| 402 | Payment Required | x402 payment authorization is required |
+| 403 | `invalid_proof_of_work` | Agent enrollment challenge or nonce is invalid |
+| 404 | `quote_not_found` | Quote does not exist or belongs to another product |
+| 404 | `job_not_found` | Job ID is unknown |
+| 409 | `quote_expired` | Quote passed its expiry |
+| 409 | `quote_request_mismatch` | Execution body differs from quoted body |
+| 422 | `invalid_request` | Schema validation failed |
+| 428 | `quote_required` | A paid call was attempted without a quote ID |
+| 503 | `provider_quorum_unavailable` | Two usable independent providers are unavailable |
+| 503 | `payment_facilitator_not_configured` | CDP x402 server credentials are missing |
+| 503 | `api_key_verification_failed` | Base Sepolia registry read failed |
+
+## Security Boundaries
+
+- The platform reporter is separate from the customer treasury.
+- The operations wallet is separate, capped, and used only for upstream providers.
+- Jobs remain locked until settlement metadata and the control-contract payment proof exist.
+- Remote URLs reject private networks, credential-bearing URLs, redirects, unsupported ports, and oversized responses.
+- Binary, empty, and incoherent provider outputs are rejected.
+- The platform wallet—not the caller—submits evidence to GenLayer.
+- API key secrets are shown once and are never stored in Blob or on-chain.
+- Critical treasury actions are timelocked; emergency pause is immediate.
+- The platform returns analysis and decisions but never signs or broadcasts the customer’s trade.
 
 ## Testnet Contracts
 
-- Base Sepolia control and treasury: `0x42eB87cb7d1bb5A83cE15b4f2a34e1722Bd43f4b`
-- Base Sepolia USDC: `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
-- Platform reporter: `0x4a53cFB1CCFf805246C28aBd1Ec56F8B56F4D08E`
-- Admin: `0x5905c9Dea6Ae52AA0947D8F7F218263889eDfC4E`
-- GenLayer Studionet compact judge: `0x2C0ab7014617160149707653eE0Faff578e29C88`
+| Component | Address |
+|---|---|
+| Base Sepolia control and treasury | `0x42eB87cb7d1bb5A83cE15b4f2a34e1722Bd43f4b` |
+| Base Sepolia USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| Platform reporter | `0x4a53cFB1CCFf805246C28aBd1Ec56F8B56F4D08E` |
+| Admin | `0x5905c9Dea6Ae52AA0947D8F7F218263889eDfC4E` |
+| GenLayer compact judge | `0x2C0ab7014617160149707653eE0Faff578e29C88` |
 
-The compact-evidence GenLayer contract was finalized in transaction `0x08f111161f6bb9ed33dd6133354f5821d68b5c342a1e8565306c7a4a90d14c12` and is configured in the live testnet gateway.
-
-## Required Vercel Configuration
+GenLayer deployment transaction:
 
 ```text
+0x08f111161f6bb9ed33dd6133354f5821d68b5c342a1e8565306c7a4a90d14c12
+```
+
+## Environment Variables
+
+```text
+APP_URL
 BLOB_READ_WRITE_TOKEN
-X402_TREASURY_ADDRESS=0x42eB87cb7d1bb5A83cE15b4f2a34e1722Bd43f4b
-CONTROL_CONTRACT_ADDRESS=0x42eB87cb7d1bb5A83cE15b4f2a34e1722Bd43f4b
-BASE_USDC_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e
-BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
-X402_NETWORK=eip155:84532
+X402_TREASURY_ADDRESS
+CONTROL_CONTRACT_ADDRESS
+BASE_USDC_ADDRESS
+BASE_SEPOLIA_RPC_URL
+X402_NETWORK
+X402_FACILITATOR_URL
 CDP_API_KEY_ID
 CDP_API_KEY_SECRET
 CDP_WALLET_SECRET
+X402_PROVIDERS_JSON
+CDP_DISCOVERY_URL
+TESTNET_JOB_BUDGET_ATOMIC
+TESTNET_DAILY_BUDGET_ATOMIC
 GENLAYER_CONTRACT_ADDRESS
 GENLAYER_SIGNER_PRIVATE_KEY
 RESULT_SIGNING_SECRET
 CRON_SECRET
-APP_URL
-DEMO_MODE=false
+DEMO_MODE
 ```
 
-## Local Validation
+Secrets must exist only in Vercel environment variables or local ignored `.env` files.
+
+## Validation
 
 ```bash
 npm install
@@ -179,20 +397,14 @@ forge build
 npm run build
 ```
 
-## Security Boundaries
+## Operational Documentation
 
-- The platform reporter is not the customer treasury.
-- A separate capped CDP operations wallet pays providers.
-- Jobs remain locked until successful x402 settlement metadata is persisted and proved.
-- External URLs reject private networks, credential-bearing URLs, redirects, unsupported ports, and oversized responses.
-- Full provider responses stay in private telemetry; GenLayer receives compact decision evidence.
-- The platform returns decisions and evidence, but never signs or broadcasts customer trading actions.
-- Critical treasury actions are timelocked; emergency pause is immediate.
+- `fix.md`: testnet fixes that must be carried into mainnet.
+- `plan.md`: local ignored implementation plan.
+- `risk.md`: local ignored operational risk register.
+- `/docs`: full human-readable API documentation.
+- `/api/openapi.json`: machine-readable OpenAPI 3.1 description.
 
-## Migration Notes
+## Testnet Notice
 
-See `fix.md` for the testnet-to-mainnet correction checklist. Local operational risks are documented in ignored `risk.md`. Local execution planning is documented in ignored `plan.md`.
-
-## Paid Beta Notice
-
-Customer payments use Base Sepolia testnet USDC only. GenLayer verdicts are anchored on Studionet and are validation outputs. This deployment accepts no mainnet funds.
+This application currently accepts Base Sepolia testnet USDC only. GenLayer decisions are anchored on Studionet. Testnet assets have no production value, and no mainnet payment should be sent to any address in this document.

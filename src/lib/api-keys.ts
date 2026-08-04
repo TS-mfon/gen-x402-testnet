@@ -4,6 +4,7 @@ import { baseSepolia } from "viem/chains";
 import { env } from "@/lib/env";
 import { bytes32Id, registerApiKeyProof } from "@/lib/control";
 import { sha256 } from "@/lib/hash";
+import { saveApiKeyIndex } from "@/lib/store";
 
 const keyAbi = [{ type: "function", name: "apiKeys", stateMutability: "view", inputs: [{ name: "", type: "bytes32" }], outputs: [{name:"keyHash",type:"bytes32"},{name:"ownerHash",type:"bytes32"},{name:"expiresAt",type:"uint64"},{name:"rateLimitPerMinute",type:"uint32"},{name:"scopes",type:"uint256"},{name:"active",type:"bool"}] }] as const;
 
@@ -19,7 +20,10 @@ export async function issueApiKey(owner: string, rateLimit = 10) {
   const ownerHash = await sha256(owner.toLowerCase()) as Hex;
   const expiresAt = Math.floor(Date.now() / 1000) + 90 * 24 * 60 * 60;
   const transaction = await registerApiKeyProof({ keyId, keyHash, ownerHash, scopes: 0b11111n, rateLimit, expiresAt });
-  return { keyId, secret, apiKey: `${keyId}.${secret}`, owner, scopes: ["quotes:create", "jobs:create", "jobs:read:own", "providers:read"], rateLimitPerMinute: rateLimit, expiresAt: new Date(expiresAt * 1000).toISOString(), transaction, warning: "This API key is shown once. Save it now; it cannot be recovered." };
+  const scopes = ["quotes:create", "jobs:create", "jobs:read:own", "providers:read"];
+  const expiresAtIso = new Date(expiresAt * 1000).toISOString();
+  await saveApiKeyIndex({ keyId, owner, scopes, rateLimitPerMinute: rateLimit, expiresAt: expiresAtIso, transaction, createdAt: new Date().toISOString() });
+  return { keyId, secret, apiKey: `${keyId}.${secret}`, owner, scopes, rateLimitPerMinute: rateLimit, expiresAt: expiresAtIso, transaction, warning: "This API key is shown once. Save it now; it cannot be recovered." };
 }
 
 export async function verifyApiKey(value: string) {

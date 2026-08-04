@@ -51,6 +51,7 @@ const evidencePath = (id: string) => `${namespace}/jobs/${id}/evidence.json`;
 const idempotencyPath = (key: string) => `${namespace}/idempotency/${key}.json`;
 const budgetPath = (date: string) => `${namespace}/budgets/${date}.json`;
 const quotePath = (id: string) => `${namespace}/quotes/${id}.json`;
+const apiKeyPath = (id: string) => `${namespace}/admin/api-keys/${id}.json`;
 
 async function readJson<T>(pathname: string): Promise<Stored<T> | null> {
   const result = await get(pathname, { access: "private", useCache: false });
@@ -83,6 +84,30 @@ export async function appendEvent(event: string, payload: Record<string, unknown
     contentType: "application/json",
     cacheControlMaxAge: 0
   });
+}
+
+export type ApiKeyIndexRecord = {
+  keyId: string;
+  owner: string;
+  scopes: string[];
+  rateLimitPerMinute: number;
+  expiresAt: string;
+  transaction?: string;
+  createdAt: string;
+};
+
+export async function saveApiKeyIndex(record: ApiKeyIndexRecord) {
+  if (!usesBlob) return record;
+  await writeJson(apiKeyPath(record.keyId), record);
+  await appendEvent("api_key.issued", {
+    keyId: record.keyId,
+    owner: record.owner,
+    scopes: record.scopes,
+    rateLimitPerMinute: record.rateLimitPerMinute,
+    expiresAt: record.expiresAt,
+    transaction: record.transaction,
+  });
+  return record;
 }
 
 export async function listEvents(limit = 500) {
