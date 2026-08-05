@@ -1,41 +1,138 @@
 import "server-only";
-import { createPublicClient, http, keccak256, stringToHex, type Hex } from "viem";
-import { baseSepolia } from "viem/chains";
+import { getAddress } from "viem";
 import { env } from "@/lib/env";
-import { bytes32Id, registerApiKeyProof } from "@/lib/control";
+import { bindingIdFor, consumeApiKeyRateLimit, createApiKeyBinding, policyHash, readApiKeyBinding, revokeApiKeyBinding, rotateApiKeyBinding, scopesToBitmap } from "@/lib/api-key-registry";
+import { API_KEY_SCOPES, ApiKeyTokenError, createApiKeyToken, parseBearerAuthorization, verifyApiKeyToken, type ApiKeyPayload, type ApiKeyScope } from "@/lib/api-key-token";
+import { ApiKeyVerificationError, verifyApiKeyAgainstRegistry } from "@/lib/api-key-verifier";
 import { sha256 } from "@/lib/hash";
-import { saveApiKeyIndex } from "@/lib/store";
 
-const keyAbi = [{ type: "function", name: "apiKeys", stateMutability: "view", inputs: [{ name: "", type: "bytes32" }], outputs: [{name:"keyHash",type:"bytes32"},{name:"ownerHash",type:"bytes32"},{name:"expiresAt",type:"uint64"},{name:"rateLimitPerMinute",type:"uint32"},{name:"scopes",type:"uint256"},{name:"active",type:"bool"}] }] as const;
-
-function randomSecret() {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return `gx_test_${Buffer.from(bytes).toString("base64url")}`;
+export class ApiKeyAuthError extends Error {
+  constructor(public readonly code: string, public readonly status: number) { super(code); }
 }
 
-export async function issueApiKey(owner: string, rateLimit = 10) {
-  const keyId = crypto.randomUUID();
-  const secret = randomSecret();
-  const keyHash = await sha256(`${keyId}:${secret}`) as Hex;
-  const ownerHash = await sha256(owner.toLowerCase()) as Hex;
-  const expiresAt = Math.floor(Date.now() / 1000) + 90 * 24 * 60 * 60;
-  const transaction = await registerApiKeyProof({ keyId, keyHash, ownerHash, scopes: 0b11111n, rateLimit, expiresAt });
-  const scopes = ["quotes:create", "jobs:create", "jobs:read:own", "providers:read"];
-  const expiresAtIso = new Date(expiresAt * 1000).toISOString();
-  await saveApiKeyIndex({ keyId, owner, scopes, rateLimitPerMinute: rateLimit, expiresAt: expiresAtIso, transaction, createdAt: new Date().toISOString() });
-  return { keyId, secret, apiKey: `${keyId}.${secret}`, owner, scopes, rateLimitPerMinute: rateLimit, expiresAt: expiresAtIso, transaction, warning: "This API key is shown once. Save it now; it cannot be recovered." };
+function secret() {
+  if (!env.API_KEY_SECRET) throw new ApiKeyAuthError("api_key_not_configured", 503);
+  return env.API_KEY_SECRET;
 }
 
-export async function verifyApiKey(value: string) {
-  const separator = value.indexOf(".");
-  if (separator < 1) return null;
-  const keyId = value.slice(0, separator); const secret = value.slice(separator + 1);
-  const publicClient = createPublicClient({ chain: baseSepolia, transport: http(env.BASE_SEPOLIA_RPC_URL) });
-  const stored = await publicClient.readContract({ address: env.CONTROL_CONTRACT_ADDRESS as `0x${string}`, abi: keyAbi, functionName: "apiKeys", args: [bytes32Id(keyId)] });
-  const [storedHash, ownerHash, expiresAt, rateLimit, scopes, active] = stored;
-  const candidate = await sha256(`${keyId}:${secret}`);
-  if (!active || storedHash.toLowerCase() !== candidate.toLowerCase() || Number(expiresAt) <= Math.floor(Date.now() / 1000)) return null;
-  return { keyId, ownerHash, expiresAt: Number(expiresAt), rateLimit: Number(rateLimit), scopes: BigInt(scopes) };
+function mapTokenError(error: unknown): never {
+  if (error instanceof ApiKeyAuthError) throw error;
+  if (error instanceof ApiKeyTokenError) {
+    const status = error.code === "api_key_secret_invalid" || error.code === "api_key_secret_too_short" ? 503 : 401;
+    throw new ApiKeyAuthError(error.code, status);
+  }
+  throw error;
+}
+
+export type IssueApiKeyInput = {
+  owner: string;
+  agent?: string;
+  policyId?: string;
+  delegatedAccount?: string | null;
+  scopes?: ApiKeyScope[];
+  rateLimitPerMinute?: number;
+};
+
+function basePayload(input: IssueApiKeyInput, keyVersion: number) {
+  return {
+    keyVersion,
+    owner: getAddress(input.owner),
+    agent: getAddress(input.agent ?? input.owner),
+    policyId: input.policyId ?? "gen-x402:testnet:default",
+    delegatedAccount: input.delegatedAccount ? getAddress(input.delegatedAccount) : null,
+    chainId: 84532,
+    scopes: input.scopes ?? [...API_KEY_SCOPES],
+    ttlSeconds: env.API_KEY_TTL_SECONDS,
+  };
+}
+
+export async function issueApiKey(input: IssueApiKeyInput) {
+  try {
+    const created = createApiKeyToken(basePayload(input, 1), secret());
+    const registry = await createApiKeyBinding(created.payload, input.rateLimitPerMinute ?? 20);
+    return issuanceResponse(created.token, created.payload, input.rateLimitPerMinute ?? 20, registry.transaction);
+  } catch (error) { mapTokenError(error); }
+}
+
+export async function verifyApiKey(value: string, requiredScope?: ApiKeyScope) {
+  try {
+    return await verifyApiKeyAgainstRegistry({ token: value, secret: secret(), requiredScope, clockSkewSeconds: env.API_KEY_CLOCK_SKEW_SECONDS, bindingId: bindingIdFor, policyHash, scopesToBitmap, loadBinding: readApiKeyBinding });
+  } catch (error) {
+    if (error instanceof ApiKeyVerificationError) {
+      const status = error.code === "insufficient_scope" ? 403 : error.code === "api_key_registry_unavailable" ? 503 : 401;
+      throw new ApiKeyAuthError(error.code, status);
+    }
+    mapTokenError(error);
+  }
+}
+
+export async function verifyAuthorization(value: string | null, requiredScope?: ApiKeyScope) {
+  try { return await verifyApiKey(parseBearerAuthorization(value), requiredScope); }
+  catch (error) { mapTokenError(error); }
+}
+
+export async function authenticateApiRequest(request: Request, requiredScope: ApiKeyScope) {
+  const verified = await verifyAuthorization(request.headers.get("authorization"), requiredScope);
+  const forwarded = request.headers.get("x-vercel-forwarded-for") ?? request.headers.get("x-forwarded-for") ?? "unknown";
+  const ipAddress = forwarded.split(",")[0]?.trim() || "unknown";
+  try { await consumeApiKeyRateLimit(verified.payload, ipAddress); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("RATE_LIMIT_EXCEEDED")) throw new ApiKeyAuthError("rate_limit_exceeded", 429);
+    throw new ApiKeyAuthError("rate_limit_unavailable", 503);
+  }
+  return verified;
+}
+
+export async function authenticateApiRequestIfPresent(request: Request, requiredScope: ApiKeyScope) {
+  if (!request.headers.has("authorization") && request.headers.get("x-client-type") !== "agent") return null;
+  return authenticateApiRequest(request, requiredScope);
+}
+
+export function apiKeyErrorResponse(error: unknown) {
+  if (error instanceof ApiKeyAuthError) return { error: error.code, status: error.status };
+  return { error: "api_key_verification_failed", status: 503 };
+}
+
+export async function rotateApiKey(value: string) {
+  const verified = await verifyApiKey(value);
+  const rotated = await rotateApiKeyBinding(verified.bindingId, verified.binding.version);
+  const created = createApiKeyToken({
+    keyVersion: rotated.version,
+    owner: verified.payload.owner,
+    agent: verified.payload.agent,
+    policyId: verified.payload.policyId,
+    delegatedAccount: verified.payload.delegatedAccount,
+    chainId: verified.payload.chainId,
+    scopes: verified.payload.scopes,
+    ttlSeconds: env.API_KEY_TTL_SECONDS,
+  }, secret());
+  return issuanceResponse(created.token, created.payload, verified.binding.rateLimitPerMinute, rotated.transaction);
+}
+
+export async function revokeApiKey(value: string) {
+  const verified = await verifyApiKey(value);
+  const transaction = await revokeApiKeyBinding(verified.bindingId);
+  return { revoked: true, keyId: verified.payload.keyId, bindingId: verified.bindingId, transaction };
+}
+
+function issuanceResponse(apiKey: string, payload: ApiKeyPayload, rateLimitPerMinute: number, transaction: string) {
+  return {
+    apiKey,
+    keyId: payload.keyId,
+    keyVersion: payload.keyVersion,
+    owner: payload.owner,
+    agent: payload.agent,
+    policyId: payload.policyId,
+    delegatedAccount: payload.delegatedAccount,
+    chainId: payload.chainId,
+    scopes: payload.scopes,
+    rateLimitPerMinute,
+    issuedAt: new Date(payload.issuedAt * 1000).toISOString(),
+    expiresAt: new Date(payload.expiresAt * 1000).toISOString(),
+    transaction,
+    warning: "This API key is shown once. It cannot be recovered; rotate it if lost.",
+  };
 }
 
 export async function verifyProofOfWork(challenge: string, nonce: string, difficulty = 4) {

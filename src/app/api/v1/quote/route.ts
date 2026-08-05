@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { quoteRequestSchema, requestSchema } from "@/lib/domain";
 import { createQuote } from "@/lib/quotes";
+import { apiKeyErrorResponse, authenticateApiRequestIfPresent } from "@/lib/api-keys";
 
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
+  try { await authenticateApiRequestIfPresent(request, "quotes:create"); }
+  catch (error) { const failure = apiKeyErrorResponse(error); return NextResponse.json({ error: failure.error }, { status: failure.status }); }
   let json: unknown;
   try { json = await request.json(); } catch { return NextResponse.json({ error: "invalid_json" }, { status: 400 }); }
   const quoted = quoteRequestSchema.safeParse(json);

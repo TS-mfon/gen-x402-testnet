@@ -143,7 +143,8 @@ const response = await fetch(baseUrl + "/api/v1/keys", {
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
     mode: "agent",
-    agentPublicKey: "did:key:z6Mk...durable-agent-identity",
+    owner: "0x1111111111111111111111111111111111111111",
+    agent: "0x2222222222222222222222222222222222222222",
     challenge,
     nonce: String(nonce)
   })
@@ -157,14 +158,16 @@ if (!response.ok) throw new Error(issued.message ?? issued.error);
 console.log({ keyId: issued.keyId, expiresAt: issued.expiresAt });
 ```
 
-The on-chain registry stores the key hash, owner hash, expiry, scopes, rate-limit metadata, and active state. It never stores the plaintext secret.
+The returned credential has the format `app_<base64url-json>.<base64url-hmac>`. Its readable payload contains only public binding metadata. The server signs it with HMAC-SHA256 using a dedicated server-only secret. The on-chain registry stores only owner, agent, policy, delegated account, chain, scopes, rate limit, active state, and current version. It never stores the raw key, token hash, HMAC signature, or signing secret.
 
 Verify a stored key without making a payment:
 
 ```bash
 curl -sS https://gen-x402-testnet.vercel.app/api/v1/keys/verify \
-  -H "X-API-Key: $GEN_X402_API_KEY"
+  -H "Authorization: Bearer $GEN_X402_API_KEY"
 ```
+
+Rotate with `POST /api/v1/keys/rotate` and revoke with `POST /api/v1/keys/revoke`, using the same Bearer header. Rotation increments the authoritative version, so every prior token for that binding fails immediately. A lost raw key cannot be recovered.
 
 ### 2. Create a free quote
 
@@ -229,8 +232,7 @@ const response = await paidFetch(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-client-type": "agent",
-      "x-api-key": process.env.GEN_X402_API_KEY
+      "authorization": "Bearer " + process.env.GEN_X402_API_KEY
     },
     body: JSON.stringify(request)
   }
@@ -317,10 +319,20 @@ Full upstream payloads remain in private telemetry. GenLayer receives only compa
 | Status | Error | Meaning |
 |---|---|---|
 | 400 | `invalid_json` | Request body is not valid JSON |
-| 401 | `api_key_required` | Agent authentication headers are missing |
-| 401 | `invalid_api_key` | Key is wrong, inactive, or expired |
+| 401 | `authorization_required` | Bearer authentication is missing |
+| 401 | `invalid_authorization_scheme` | Authorization is not exactly `Bearer <token>` |
+| 401 | `invalid_api_key_signature` | Token payload or signature was modified |
+| 401 | `invalid_api_key_claims` | Token claims fail strict schema validation |
+| 401 | `api_key_expired` | Token expiry has passed |
+| 401 | `api_key_not_yet_valid` | Issued-at timestamp is unacceptably far in the future |
+| 401 | `api_key_binding_not_found` | No authoritative metadata binding exists |
+| 401 | `api_key_revoked` | Binding is inactive |
+| 401 | `api_key_version_mismatch` | Binding was rotated and the token is stale |
+| 401 | `api_key_binding_mismatch` | Public token claims differ from authoritative metadata |
 | 402 | Payment Required | x402 payment authorization is required |
 | 403 | `invalid_proof_of_work` | Agent enrollment challenge or nonce is invalid |
+| 403 | `insufficient_scope` | Binding does not permit the requested operation |
+| 429 | `rate_limit_exceeded` | Key, agent, owner, or IP exceeded its one-minute limit |
 | 404 | `quote_not_found` | Quote does not exist or belongs to another product |
 | 404 | `job_not_found` | Job ID is unknown |
 | 409 | `quote_expired` | Quote passed its expiry |
@@ -329,7 +341,8 @@ Full upstream payloads remain in private telemetry. GenLayer receives only compa
 | 428 | `quote_required` | A paid call was attempted without a quote ID |
 | 503 | `provider_quorum_unavailable` | Two usable independent providers are unavailable |
 | 503 | `payment_facilitator_not_configured` | CDP x402 server credentials are missing |
-| 503 | `api_key_verification_failed` | Base Sepolia registry read failed |
+| 503 | `api_key_registry_unavailable` | Base Sepolia registry validation failed closed |
+| 503 | `rate_limit_unavailable` | Distributed on-chain rate accounting could not complete |
 
 ## Security Boundaries
 
@@ -339,7 +352,9 @@ Full upstream payloads remain in private telemetry. GenLayer receives only compa
 - Remote URLs reject private networks, credential-bearing URLs, redirects, unsupported ports, and oversized responses.
 - Binary, empty, and incoherent provider outputs are rejected.
 - The platform wallet—not the caller—submits evidence to GenLayer.
-- API key secrets are shown once and are never stored in Blob or on-chain.
+- Raw API keys are shown once and are never stored in Blob, logs, analytics, browser storage, URLs, or on-chain.
+- HMAC verification uses Node.js `crypto`, a fixed SHA-256 algorithm, and constant-time signature comparison.
+- On-chain rate buckets are HMAC-derived identifiers for key ID, agent, owner, and IP; raw identifiers are not written as rate-counter keys.
 - Critical treasury actions are timelocked; emergency pause is immediate.
 - The platform returns analysis and decisions but never signs or broadcasts the customer’s trade.
 
@@ -348,6 +363,7 @@ Full upstream payloads remain in private telemetry. GenLayer receives only compa
 | Component | Address |
 |---|---|
 | Base Sepolia control and treasury | `0x42eB87cb7d1bb5A83cE15b4f2a34e1722Bd43f4b` |
+| Base Sepolia API-key registry | `0xAf62B4FcE1b0FBf87BD0Dcf2A06A4434B9dCFf2c` |
 | Base Sepolia USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 | Platform reporter | `0x4a53cFB1CCFf805246C28aBd1Ec56F8B56F4D08E` |
 | Admin | `0x5905c9Dea6Ae52AA0947D8F7F218263889eDfC4E` |
@@ -359,6 +375,12 @@ GenLayer deployment transaction:
 0x08f111161f6bb9ed33dd6133354f5821d68b5c342a1e8565306c7a4a90d14c12
 ```
 
+API-key registry deployment transaction:
+
+```text
+0x4cbbc233bc49389ae8fd03cd748150c74ef7d39280e474f4d68c38fa4d4752ff
+```
+
 ## Environment Variables
 
 ```text
@@ -366,6 +388,11 @@ APP_URL
 BLOB_READ_WRITE_TOKEN
 X402_TREASURY_ADDRESS
 CONTROL_CONTRACT_ADDRESS
+API_KEY_REGISTRY_ADDRESS
+API_KEY_SECRET
+API_KEY_TTL_SECONDS
+API_KEY_CLOCK_SKEW_SECONDS
+PLATFORM_SIGNER_PRIVATE_KEY
 BASE_USDC_ADDRESS
 BASE_SEPOLIA_RPC_URL
 X402_NETWORK

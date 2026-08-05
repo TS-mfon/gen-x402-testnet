@@ -2,15 +2,13 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { requestSchema, resolvePlan, type ProductType } from "@/lib/domain";
 import { sha256, stableJson } from "@/lib/hash";
 import { createJob, getJob, getQuote } from "@/lib/store";
-import { verifyApiKey } from "@/lib/api-keys";
+import { apiKeyErrorResponse, authenticateApiRequest } from "@/lib/api-keys";
 
 export function productHandler(product: ProductType) {
   return async (request: NextRequest) => {
-    if (request.headers.get("x-client-type") === "agent") {
-      const apiKey = request.headers.get("x-api-key");
-      if (!apiKey) return NextResponse.json({ error: "api_key_required" }, { status: 401 });
-      try { if (!await verifyApiKey(apiKey)) return NextResponse.json({ error: "invalid_api_key" }, { status: 401 }); }
-      catch { return NextResponse.json({ error: "api_key_verification_failed" }, { status: 503 }); }
+    if (request.headers.has("authorization") || request.headers.get("x-client-type") === "agent") {
+      try { await authenticateApiRequest(request, "jobs:create"); }
+      catch (error) { const failure = apiKeyErrorResponse(error); return NextResponse.json({ error: failure.error }, { status: failure.status }); }
     }
     let json: unknown;
     try { json = await request.json(); } catch { return NextResponse.json({ error: "invalid_json" }, { status: 400 }); }

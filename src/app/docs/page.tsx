@@ -51,7 +51,8 @@ const issueResponse = await fetch(baseUrl + "/api/v1/keys", {
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
     mode: "agent",
-    agentPublicKey: agentIdentity,
+    owner: process.env.OWNER_ADDRESS,
+    agent: process.env.AGENT_ADDRESS,
     challenge,
     nonce: String(nonce)
   })
@@ -97,8 +98,7 @@ const response = await paidFetch(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-client-type": "agent",
-      "x-api-key": process.env.GEN_X402_API_KEY
+      "authorization": "Bearer " + process.env.GEN_X402_API_KEY
     },
     body: JSON.stringify(request)
   }
@@ -118,8 +118,12 @@ const endpoints = [
 
 const errors = [
   ["400", "invalid_json", "Send parseable JSON with Content-Type: application/json."],
-  ["401", "api_key_required", "Add X-Client-Type: agent and X-API-Key."],
-  ["401", "invalid_api_key", "Verify the full key, expiry, and active on-chain state."],
+  ["401", "authorization_required", "Add Authorization: Bearer <api-key>."],
+  ["401", "invalid_api_key_signature", "The credential is malformed or has been modified."],
+  ["401", "api_key_version_mismatch", "Rotate clients to the latest key version."],
+  ["401", "api_key_revoked", "The authoritative binding is inactive."],
+  ["403", "insufficient_scope", "Use a binding that permits the requested operation."],
+  ["429", "rate_limit_exceeded", "Back off until the next one-minute window."],
   ["402", "Payment Required", "Use an x402 client funded with Base Sepolia USDC."],
   ["403", "invalid_proof_of_work", "Request a new challenge and solve it before expiry."],
   ["404", "quote_not_found", "Create a new quote for the same product endpoint."],
@@ -130,7 +134,7 @@ const errors = [
   ["428", "quote_required", "Call POST /api/v1/quote and supply its quote ID."],
   ["503", "provider_quorum_unavailable", "Two usable providers are unavailable; retry later."],
   ["503", "payment_facilitator_not_configured", "Deployment configuration error; do not retry payment."],
-  ["503", "api_key_verification_failed", "The on-chain registry read failed; retry with backoff."],
+  ["503", "api_key_registry_unavailable", "The on-chain registry could not be validated; authentication fails closed."],
 ];
 
 function Code({ children }: { children: string }) {
@@ -210,22 +214,21 @@ export default function Page() {
         <section id="authentication">
           <span className="docs-index">03 / AUTHENTICATION</span>
           <h2>API key model</h2>
-          <p>Keys use <code>&lt;keyId&gt;.&lt;one-time-secret&gt;</code>. The plaintext credential is returned once. Base Sepolia stores only the key hash, owner hash, expiry, scope bitmap, rate-limit metadata, and active state.</p>
+          <p>Keys use <code>app_&lt;base64url-json-payload&gt;.&lt;base64url-hmac&gt;</code>. The readable payload contains only public metadata. Base Sepolia stores owner, agent, policy, delegated account, chain, scopes, rate limit, active state, and current version—never the bearer token or HMAC secret.</p>
           <table className="docs-table"><thead><tr><th>Header</th><th>Required</th><th>Purpose</th></tr></thead><tbody>
-            <tr><td><code>X-Client-Type: agent</code></td><td>Agent calls</td><td>Activates API-key authentication.</td></tr>
-            <tr><td><code>X-API-Key</code></td><td>Agent calls</td><td>Full one-time-issued credential.</td></tr>
+            <tr><td><code>Authorization</code></td><td>Agent calls</td><td><code>Bearer app_…</code>; the raw credential is shown once and never stored.</td></tr>
             <tr><td><code>X-Quote-Id</code></td><td>Paid execution</td><td>Links execution to the frozen quote. The <code>quoteId</code> query parameter is also accepted.</td></tr>
             <tr><td><code>Content-Type</code></td><td>POST requests</td><td>Must be <code>application/json</code>.</td></tr>
           </tbody></table>
           <h3>Verify a stored key without payment</h3>
-          <Code>{`curl -sS ${baseUrl}/api/v1/keys/verify -H "X-API-Key: $GEN_X402_API_KEY"`}</Code>
-          <p>A valid key returns its ID, expiry, rate-limit metadata, network, and <code>paymentRequiredPerDecision: true</code>. It never returns the secret or owner hash.</p>
+          <Code>{`curl -sS ${baseUrl}/api/v1/keys/verify -H "Authorization: Bearer $GEN_X402_API_KEY"`}</Code>
+          <p>A valid key returns public binding metadata, expiry, scopes, rate limit, network, and <code>paymentRequiredPerDecision: true</code>. It never returns the signing secret.</p>
         </section>
 
         <section id="agent-enrollment">
           <span className="docs-index">04 / AUTONOMOUS AGENT ENROLLMENT</span>
           <h2>How an agent creates its own API key</h2>
-          <p>A walletless agent requests a short-lived server-signed challenge, solves a bounded SHA-256 proof of work, and submits the solution with a durable DID, public key, or stable identity string.</p>
+          <p>An agent requests a short-lived server-signed challenge, solves a bounded SHA-256 proof of work, and submits the owner and agent Base Sepolia addresses. The owner is the controlling identity; the agent is the delegated caller identity included in the public signed payload and authoritative binding.</p>
           <h3>1. Request the five-minute challenge</h3>
           <Code>{`curl -sS ${baseUrl}/api/v1/keys/challenge`}</Code>
           <Code>{`{
@@ -239,8 +242,11 @@ export default function Page() {
           <h3>3. Store the one-time response</h3>
           <Code>{`{
   "keyId": "<uuid>",
-  "secret": "gx_test_<one-time-secret>",
-  "apiKey": "<keyId>.gx_test_<one-time-secret>",
+  "keyVersion": 1,
+  "apiKey": "app_<base64url-json-payload>.<base64url-hmac>",
+  "owner": "0x<owner>",
+  "agent": "0x<agent>",
+  "policyId": "gen-x402:testnet:default",
   "scopes": ["quotes:create", "jobs:create", "jobs:read:own", "providers:read"],
   "rateLimitPerMinute": 5,
   "expiresAt": "<ISO-8601 timestamp>",

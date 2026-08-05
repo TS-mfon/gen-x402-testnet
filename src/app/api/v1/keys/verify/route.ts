@@ -1,26 +1,24 @@
 import { NextResponse } from "next/server";
-import { verifyApiKey } from "@/lib/api-keys";
+import { apiKeyErrorResponse, verifyAuthorization } from "@/lib/api-keys";
 
 export async function GET(request: Request) {
-  const apiKey = request.headers.get("x-api-key");
-  if (!apiKey) return NextResponse.json({ error: "api_key_required" }, { status: 401 });
-
   try {
-    const key = await verifyApiKey(apiKey);
-    if (!key) return NextResponse.json({ error: "invalid_api_key" }, { status: 401 });
+    const verified = await verifyAuthorization(request.headers.get("authorization"));
     return NextResponse.json({
       active: true,
-      keyId: key.keyId,
-      expiresAt: new Date(key.expiresAt * 1000).toISOString(),
-      rateLimitPerMinute: key.rateLimit,
-      scopesBitmap: key.scopes.toString(),
+      keyId: verified.payload.keyId,
+      keyVersion: verified.payload.keyVersion,
+      owner: verified.payload.owner,
+      agent: verified.payload.agent,
+      policyId: verified.payload.policyId,
+      expiresAt: new Date(verified.payload.expiresAt * 1000).toISOString(),
+      rateLimitPerMinute: verified.binding.rateLimitPerMinute,
+      scopes: verified.payload.scopes,
       network: "eip155:84532",
       paymentRequiredPerDecision: true,
-    });
+    }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return NextResponse.json({
-      error: "api_key_verification_failed",
-      message: error instanceof Error ? error.message : "Unable to read the on-chain key registry",
-    }, { status: 503 });
+    const failure = apiKeyErrorResponse(error);
+    return NextResponse.json({ error: failure.error }, { status: failure.status, headers: { "Cache-Control": "no-store" } });
   }
 }

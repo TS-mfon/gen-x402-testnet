@@ -40,9 +40,8 @@ function paidPath(summary: string) {
       parameters: [
         { $ref: "#/components/parameters/QuoteIdQuery" },
         { $ref: "#/components/parameters/QuoteIdHeader" },
-        { $ref: "#/components/parameters/ClientType" },
-        { $ref: "#/components/parameters/ApiKey" },
       ],
+      security: [{}, { BearerAuth: [] }],
       requestBody: {
         required: true,
         content: { "application/json": { schema: { $ref: "#/components/schemas/IntelligenceRequest" } } },
@@ -81,6 +80,7 @@ const document = {
       post: {
         tags: ["Quotes"],
         summary: "Simulate provider routing and calculate an exact price",
+        security: [{}, { BearerAuth: [] }],
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/QuoteRequest" } } } },
         responses: {
           "200": { description: "Frozen 15-minute quote", content: { "application/json": { schema: { $ref: "#/components/schemas/QuoteResponse" } } } },
@@ -99,6 +99,7 @@ const document = {
       get: {
         tags: ["Jobs"],
         summary: "Poll job, provider evidence, GenLayer execution, and verdict",
+        security: [{}, { BearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         responses: {
           "200": { description: "Current job snapshot", content: { "application/json": { schema: { $ref: "#/components/schemas/JobResult" } } } },
@@ -107,7 +108,7 @@ const document = {
       },
     },
     "/api/v1/providers": {
-      get: { tags: ["Providers"], summary: "List configured and discovered providers", responses: { "200": { description: "Provider registry" } } },
+      get: { tags: ["Providers"], summary: "List configured and discovered providers", security: [{}, { BearerAuth: [] }], responses: { "200": { description: "Provider registry" } } },
     },
     "/api/v1/keys/challenge": {
       get: { tags: ["API keys"], summary: "Create a five-minute walletless-agent proof-of-work challenge", responses: { "200": { description: "Challenge and difficulty" }, "503": error } },
@@ -115,7 +116,7 @@ const document = {
     "/api/v1/keys": {
       post: {
         tags: ["API keys"],
-        summary: "Issue a key and register its hash on Base Sepolia",
+        summary: "Issue a stateless key and register public binding metadata on Base Sepolia",
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/KeyEnrollment" } } } },
         responses: {
           "201": { description: "One-time API key response", content: { "application/json": { schema: { $ref: "#/components/schemas/IssuedKey" } } } },
@@ -130,17 +131,24 @@ const document = {
       get: {
         tags: ["API keys"],
         summary: "Verify a key without making a paid request",
-        parameters: [{ $ref: "#/components/parameters/ApiKey" }],
+        security: [{ BearerAuth: [] }],
         responses: { "200": { description: "Active key metadata" }, "401": error, "503": error },
       },
     },
+    "/api/v1/keys/rotate": {
+      post: { tags: ["API keys"], summary: "Rotate a key by incrementing its authoritative version", security: [{ BearerAuth: [] }], responses: { "200": { description: "One-time replacement key" }, "401": error, "503": error } },
+    },
+    "/api/v1/keys/revoke": {
+      post: { tags: ["API keys"], summary: "Revoke a key binding", security: [{ BearerAuth: [] }], responses: { "200": { description: "Revocation receipt" }, "401": error, "503": error } },
+    },
   },
   components: {
+    securitySchemes: {
+      BearerAuth: { type: "http", scheme: "bearer", bearerFormat: "app_<base64url-payload>.<base64url-hmac>" },
+    },
     parameters: {
       QuoteIdQuery: { name: "quoteId", in: "query", schema: { type: "string", format: "uuid" } },
       QuoteIdHeader: { name: "X-Quote-Id", in: "header", schema: { type: "string", format: "uuid" } },
-      ClientType: { name: "X-Client-Type", in: "header", schema: { type: "string", enum: ["agent"] } },
-      ApiKey: { name: "X-API-Key", in: "header", required: true, schema: { type: "string" } },
     },
     schemas: {
       IntelligenceRequest: intelligenceRequest,
@@ -176,18 +184,18 @@ const document = {
         },
       },
       KeyEnrollment: {
-        oneOf: [
-          { type: "object", required: ["mode", "owner"], properties: { mode: { const: "wallet" }, owner: { type: "string", minLength: 8 } } },
-          { type: "object", required: ["mode", "agentPublicKey", "challenge", "nonce"], properties: { mode: { const: "agent" }, agentPublicKey: { type: "string", minLength: 8 }, challenge: { type: "string" }, nonce: { type: "string" } } },
-        ],
+        type: "object", required: ["mode", "owner"], additionalProperties: false,
+        properties: { mode: { type: "string", enum: ["wallet", "agent"] }, owner: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" }, agent: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" }, policyId: { type: "string", maxLength: 128 }, delegatedAccount: { type: ["string", "null"] }, scopes: { type: "array", items: { type: "string", enum: ["quotes:create", "jobs:create", "jobs:read:own", "providers:read"] } }, rateLimitPerMinute: { type: "integer", minimum: 1, maximum: 120 }, challenge: { type: "string" }, nonce: { type: "string" } },
       },
       IssuedKey: {
         type: "object",
         properties: {
           keyId: { type: "string", format: "uuid" },
-          secret: { type: "string", writeOnly: true },
           apiKey: { type: "string", writeOnly: true },
+          keyVersion: { type: "integer" },
           owner: { type: "string" },
+          agent: { type: "string" },
+          policyId: { type: "string" },
           scopes: { type: "array", items: { type: "string" } },
           rateLimitPerMinute: { type: "integer" },
           expiresAt: { type: "string", format: "date-time" },
