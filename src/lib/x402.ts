@@ -8,6 +8,7 @@ import { env } from "@/lib/env";
 import type { PricePlan } from "@/lib/domain";
 import { appendEvent, getJob, getQuote, markPaymentProved, savePaymentSettlement, settleQuote } from "@/lib/store";
 import { recordPaymentProof } from "@/lib/control";
+import { objectStoreConfigured } from "@/lib/object-store";
 
 export const BASE_SEPOLIA = "eip155:84532" as const;
 export const SUPPORTED_X402_NETWORKS = [BASE_SEPOLIA] as const;
@@ -64,6 +65,7 @@ function createResourceServer() {
 
 export function paidRoute(handler: (r: NextRequest) => Promise<NextResponse<unknown>>, plan: PricePlan, description: string) {
   if (env.DEMO_MODE === "true") return handler;
+  if (!objectStoreConfigured()) return async () => NextResponse.json({ error: "durable_storage_not_configured", message: "Payment is disabled because the R2 object store is not configured. No USDC authorization was requested." }, { status: 503 });
   if (!hasFacilitatorCredentials()) {
     return async () => NextResponse.json({
       error: "payment_facilitator_not_configured",
