@@ -13,12 +13,12 @@
     "contracts:lint": "uvx --python 3.12 --from genvm-linter genvm-lint check contracts/genlayer/IntelligenceGateway.py"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1103.0",
     "@coinbase/cdp-sdk": "^1.54.0",
     "@fontsource/barlow-condensed": "^5.3.0",
     "@fontsource/bodoni-moda": "^5.3.0",
     "@fontsource/chivo": "^5.3.0",
     "@types/three": "^0.179.0",
-    "@vercel/blob": "^2.6.1",
     "@x402/core": "^2.20.0",
     "@x402/evm": "^2.20.0",
     "@x402/extensions": "^2.20.0",

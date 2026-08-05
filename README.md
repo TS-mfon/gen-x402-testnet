@@ -50,7 +50,7 @@ Human wallet or agent payer
 ### Infrastructure
 
 - **Frontend and API:** Next.js 16 serverless functions on Vercel.
-- **State:** private Vercel Blob objects; no SQL database.
+- **State:** Cloudflare R2-compatible private object storage; no SQL database.
 - **Customer payment:** x402 v2 exact payments in Base Sepolia USDC.
 - **Upstream payment:** dedicated capped CDP API-key wallet.
 - **Treasury and controls:** `GenX402Control` on Base Sepolia.
@@ -385,7 +385,11 @@ API-key registry deployment transaction:
 
 ```text
 APP_URL
-BLOB_READ_WRITE_TOKEN
+R2_ENDPOINT
+R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY
+R2_BUCKET_NAME
+QUOTE_SIGNING_SECRET
 X402_TREASURY_ADDRESS
 CONTROL_CONTRACT_ADDRESS
 API_KEY_REGISTRY_ADDRESS

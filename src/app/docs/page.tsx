@@ -208,7 +208,7 @@ export default function Page() {
             <div className="docs-stat"><span>PROTOCOL RESERVE</span><b>≥30%</b><p>Minimum retained revenue plus unused operational funds.</p></div>
             <div className="docs-stat"><span>GENLAYER RESERVE</span><b>≥10%</b><p>Minimum allocation reserved for consensus execution.</p></div>
           </div>
-          <p>No SQL database, VPS, local process, or persistent worker is required. Private Vercel Blob objects store quotes, jobs, evidence, verdicts, idempotency records, budgets, and audit events.</p>
+          <p>No SQL database, VPS, local process, or persistent worker is required. Quotes are signed stateless tokens; private R2-compatible object storage holds jobs, evidence, verdicts, idempotency records, budgets, and audit events.</p>
         </section>
 
         <section id="authentication">

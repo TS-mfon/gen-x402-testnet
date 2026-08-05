@@ -2,7 +2,10 @@ import "server-only";
 import { z } from "zod";
 
 const schema = z.object({
-  BLOB_READ_WRITE_TOKEN: z.string().optional(),
+  R2_ENDPOINT: z.string().url().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_BUCKET_NAME: z.string().optional(),
   X402_TREASURY_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).default("0x42eB87cb7d1bb5A83cE15b4f2a34e1722Bd43f4b"),
   BASE_USDC_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).default("0x036CbD53842c5426634e7929541eC2318f3dCF7e"),
   X402_NETWORK: z.literal("eip155:84532").default("eip155:84532"),
@@ -24,13 +27,17 @@ const schema = z.object({
   TESTNET_DAILY_BUDGET_ATOMIC: z.coerce.number().int().positive().default(5_000_000),
   TESTNET_JOB_BUDGET_ATOMIC: z.coerce.number().int().positive().default(500_000),
   RESULT_SIGNING_SECRET: z.string().min(32).optional(),
+  QUOTE_SIGNING_SECRET: z.string().min(32).optional(),
   CRON_SECRET: z.string().min(16).optional(),
   APP_URL: z.string().url().default("http://localhost:3000"),
   DEMO_MODE: z.enum(["true", "false"]).default("false")
 });
 
 export const env = schema.parse({
-  BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN,
+  R2_ENDPOINT: process.env.R2_ENDPOINT,
+  R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
+  R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
+  R2_BUCKET_NAME: process.env.R2_BUCKET_NAME,
   X402_TREASURY_ADDRESS: process.env.X402_TREASURY_ADDRESS,
   BASE_USDC_ADDRESS: process.env.BASE_USDC_ADDRESS,
   X402_NETWORK: process.env.X402_NETWORK,
@@ -52,6 +59,7 @@ export const env = schema.parse({
   TESTNET_DAILY_BUDGET_ATOMIC: process.env.TESTNET_DAILY_BUDGET_ATOMIC,
   TESTNET_JOB_BUDGET_ATOMIC: process.env.TESTNET_JOB_BUDGET_ATOMIC,
   RESULT_SIGNING_SECRET: process.env.RESULT_SIGNING_SECRET,
+  QUOTE_SIGNING_SECRET: process.env.QUOTE_SIGNING_SECRET,
   CRON_SECRET: process.env.CRON_SECRET,
   APP_URL: process.env.APP_URL,
   DEMO_MODE: process.env.DEMO_MODE
